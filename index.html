@@ -412,6 +412,56 @@
     .footer-gallery-pic{ width:72px; height:72px; }
     .footer-gallery-item{ width:88px; }
   }
+
+  /* ================= RBAC: login screen + permission UI ================= */
+  #rbacLoginScreen{
+    position:fixed; inset:0; z-index:9999;
+    background:linear-gradient(160deg, var(--bg), var(--sand));
+    display:flex; align-items:center; justify-content:center; padding:20px;
+  }
+  #rbacLoginScreen.hidden{ display:none; }
+  .rbac-login-card{
+    background:var(--panel); border-radius:var(--r-card); padding:28px 24px;
+    width:100%; max-width:360px; box-shadow:0 10px 30px rgba(74,48,32,0.22);
+    border:1px solid var(--line);
+  }
+  .rbac-login-card h2{ margin:0 0 4px; font-family:'Cairo',sans-serif; color:var(--espresso); font-size:20px; }
+  .rbac-login-card p.rbac-sub{ margin:0 0 18px; font-size:12.5px; color:var(--text-dim); }
+  .rbac-field{ margin-bottom:12px; }
+  .rbac-field label{ display:block; font-size:12.5px; color:var(--text-dim); margin-bottom:4px; }
+  .rbac-field input{
+    width:100%; box-sizing:border-box; padding:10px 12px; border-radius:10px;
+    border:1px solid var(--line); background:var(--paper); font-family:inherit; font-size:14px;
+  }
+  .rbac-login-btn{
+    width:100%; margin-top:6px; padding:11px; border:none; border-radius:12px;
+    background:var(--gold); color:#fff; font-weight:700; cursor:pointer; font-family:inherit; font-size:14.5px;
+  }
+  .rbac-login-btn:active{ transform:scale(0.98); }
+  .rbac-login-error{ color:var(--danger); font-size:12.5px; margin-top:10px; min-height:14px; }
+  .rbac-login-hint{ margin-top:16px; padding-top:12px; border-top:1px dashed var(--line); font-size:11.5px; color:var(--text-dim2); line-height:1.7; }
+
+  .rbac-userbar{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    font-size:12px; color:var(--text-dim);
+  }
+  .rbac-role-chip{
+    display:inline-block; padding:2px 9px; border-radius:999px; font-size:11px; font-weight:700;
+  }
+  .rbac-role-chip.admin{ background:var(--gold-soft); color:var(--coffee); }
+  .rbac-role-chip.user{ background:var(--mint-soft); color:var(--cinnamon); }
+  .rbac-logout-link{
+    background:none; border:none; color:var(--danger); font-size:12px; text-decoration:underline;
+    cursor:pointer; font-family:inherit; padding:0;
+  }
+  [data-perm-locked="true"]{ opacity:0.45; filter:grayscale(0.4); pointer-events:none; position:relative; }
+  .rbac-users-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .rbac-users-table th, .rbac-users-table td{ text-align:right; padding:8px 6px; border-bottom:1px solid var(--line); vertical-align:top; }
+  .rbac-perm-grid{ display:flex; flex-wrap:wrap; gap:8px 14px; }
+  .rbac-perm-grid label{ display:flex; align-items:center; gap:5px; font-size:12.5px; cursor:pointer; }
+  .rbac-role-select{ padding:5px 8px; border-radius:8px; border:1px solid var(--line); font-family:inherit; font-size:12.5px; }
+  .rbac-newuser-row{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:10px; }
+  .rbac-newuser-row input{ padding:8px 10px; border-radius:8px; border:1px solid var(--line); font-family:inherit; font-size:13px; }
 </style>
 </head>
 <body>
@@ -419,6 +469,26 @@
 <span class="bg-star" style="top:22%; right:5%; font-size:16px; animation-delay:1.1s;">✦</span>
 <span class="bg-star" style="bottom:12%; left:6%; font-size:18px; animation-delay:.7s;">✦</span>
 <span class="bg-star" style="bottom:26%; right:4%; font-size:20px; animation-delay:1.6s;">⭐</span>
+
+<!-- ================= RBAC: Login Screen ================= -->
+<div id="rbacLoginScreen" class="hidden">
+  <div class="rbac-login-card">
+    <h2>تسجيل الدخول</h2>
+    <p class="rbac-sub">برنامج نقاط التجميع الشهري — الرجاء تسجيل الدخول للمتابعة</p>
+    <div class="rbac-field">
+      <label for="rbacUsername">اسم المستخدم</label>
+      <input type="text" id="rbacUsername" autocomplete="username" placeholder="اسم المستخدم">
+    </div>
+    <div class="rbac-field">
+      <label for="rbacPassword">كلمة المرور</label>
+      <input type="password" id="rbacPassword" autocomplete="current-password" placeholder="كلمة المرور">
+    </div>
+    <button class="rbac-login-btn" id="rbacLoginBtn">دخول</button>
+    <p class="rbac-login-error" id="rbacLoginError"></p>
+    <p class="rbac-login-hint" id="rbacLoginHint"></p>
+  </div>
+</div>
+
 <div class="wrap">
 
   <div id="warnHost"></div>
@@ -427,6 +497,8 @@
     <span class="sync-dot" id="syncDot"></span>
     <span id="syncText">غير متصل بالمزامنة</span>
     <button class="sync-link" id="syncGotoSettings">تفاصيل</button>
+    <span style="flex:1"></span>
+    <span class="rbac-userbar" id="rbacUserBar"></span>
   </div>
 
   <div class="hero">
@@ -543,8 +615,299 @@
   let syncSaveTimer = null;
   let lastPushedJSON = null;   // used to ignore realtime echoes of our own writes
   let isApplyingRemote = false;
+  let pushInFlight = false;    // true while a push request is on the wire
+  let pushQueued = false;      // true if data changed again while a push was in flight
 
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+
+  // ================================================================
+  // ===================  RBAC (Roles & Permissions)  ==============
+  // ================================================================
+  // Storage: localStorage by default. The shape below is intentionally
+  // identical to the Supabase table `app_users` (see SQL at the end of
+  // this file / provided separately) so this can be swapped for a real
+  // Supabase-backed table later with almost no code changes:
+  //   { id, username, password, role: 'admin'|'user', permissions: {...}, created_at }
+  const RBAC_STORAGE_KEY = 'points-app-rbac-v1';
+
+  // Every feature in the app that a normal "user" can be granted/denied.
+  // Admins implicitly have ALL permissions and can also access "الإعدادات".
+  const RBAC_PERMISSIONS = [
+    { key: 'eval',    label: 'الوصول لتبويب "التقييم اليومي"' },
+    { key: 'results', label: 'الوصول لتبويب "النتائج"' },
+    { key: 'archive', label: 'الوصول لتبويب "الأرشيف والمقارنة"' },
+    { key: 'edit',    label: 'إضافة/تعديل التقييمات والبيانات' },
+    { key: 'delete',  label: 'الحذف والمسح' },
+    { key: 'export',  label: 'تصدير/استيراد البيانات' }
+  ];
+
+  function rbacDefaultPermissions(allTrue){
+    const p = {};
+    RBAC_PERMISSIONS.forEach(perm => { p[perm.key] = !!allTrue; });
+    return p;
+  }
+
+  function rbacDefaultStore(){
+    return {
+      users: [
+        {
+          id: 'u_admin',
+          username: 'admin',
+          password: 'admin123',
+          role: 'admin',
+          permissions: rbacDefaultPermissions(true),
+          created_at: new Date().toISOString()
+        }
+      ],
+      currentUserId: null
+    };
+  }
+
+  function rbacLoad(){
+    try{
+      const raw = localStorage.getItem(RBAC_STORAGE_KEY);
+      if(!raw) { const d = rbacDefaultStore(); rbacSave(d); return d; }
+      const parsed = JSON.parse(raw);
+      if(!parsed || !Array.isArray(parsed.users) || parsed.users.length === 0){
+        const d = rbacDefaultStore(); rbacSave(d); return d;
+      }
+      // make sure every user has the full permission-key set (forward-compat)
+      parsed.users.forEach(u=>{
+        u.permissions = Object.assign(rbacDefaultPermissions(false), u.permissions || {});
+      });
+      return parsed;
+    }catch(e){
+      const d = rbacDefaultStore(); rbacSave(d); return d;
+    }
+  }
+
+  function rbacSave(store){
+    try{ localStorage.setItem(RBAC_STORAGE_KEY, JSON.stringify(store)); }catch(e){ /* ignore quota errors */ }
+  }
+
+  let rbacStore = rbacLoad();
+
+  function rbacCurrentUser(){
+    if(!rbacStore.currentUserId) return null;
+    return rbacStore.users.find(u=>u.id === rbacStore.currentUserId) || null;
+  }
+  function rbacIsAdmin(){
+    const u = rbacCurrentUser();
+    return !!u && u.role === 'admin';
+  }
+  function rbacHasPerm(key){
+    const u = rbacCurrentUser();
+    if(!u) return false;
+    if(u.role === 'admin') return true;
+    return !!u.permissions[key];
+  }
+  // Tabs a given user is allowed to see, in their natural order.
+  function rbacAllowedTabs(){
+    const tabs = [];
+    if(rbacHasPerm('eval')) tabs.push('eval');
+    if(rbacHasPerm('results')) tabs.push('results');
+    if(rbacHasPerm('archive')) tabs.push('archive');
+    if(rbacIsAdmin()) tabs.push('settings');
+    return tabs;
+  }
+
+  function rbacLogin(username, password){
+    const u = rbacStore.users.find(x=> x.username === username && x.password === password);
+    if(!u) return false;
+    rbacStore.currentUserId = u.id;
+    rbacSave(rbacStore);
+    return true;
+  }
+  function rbacLogout(){
+    rbacStore.currentUserId = null;
+    rbacSave(rbacStore);
+    location.reload();
+  }
+
+  function rbacShowLogin(message){
+    document.getElementById('rbacLoginScreen').classList.remove('hidden');
+    document.getElementById('rbacLoginError').textContent = message || '';
+    const hint = document.getElementById('rbacLoginHint');
+    if(rbacStore.users.length === 1 && rbacStore.users[0].id === 'u_admin' && rbacStore.users[0].password === 'admin123'){
+      hint.textContent = 'أول تشغيل؟ استخدم: admin / admin123 ثم غيّر كلمة المرور لاحقًا من الإعدادات.';
+    } else {
+      hint.textContent = '';
+    }
+  }
+  function rbacHideLogin(){
+    document.getElementById('rbacLoginScreen').classList.add('hidden');
+  }
+
+  function rbacRenderUserBar(){
+    const u = rbacCurrentUser();
+    const bar = document.getElementById('rbacUserBar');
+    if(!bar) return;
+    if(!u){ bar.innerHTML = ''; return; }
+    const roleLabel = u.role === 'admin' ? 'مدير' : 'مستخدم';
+    bar.innerHTML = `
+      <span>👤 ${escapeHtml(u.username)}</span>
+      <span class="rbac-role-chip ${u.role}">${roleLabel}</span>
+      <button class="rbac-logout-link" id="rbacLogoutBtn">تسجيل الخروج</button>
+    `;
+    const logoutBtn = document.getElementById('rbacLogoutBtn');
+    if(logoutBtn) logoutBtn.addEventListener('click', rbacLogout);
+  }
+
+  // Hide/disable UI according to the logged-in user's role & permissions.
+  // Called once after login, and again any time settings/permissions change.
+  function rbacApplyUI(){
+    // 1) tab buttons
+    document.querySelectorAll('.tab-btn').forEach(btn=>{
+      const tab = btn.getAttribute('data-tab');
+      let allowed;
+      if(tab === 'settings') allowed = rbacIsAdmin();
+      else allowed = rbacHasPerm(tab);
+      btn.style.display = allowed ? '' : 'none';
+    });
+    // 2) if current tab is no longer allowed, jump to the first allowed one
+    const allowedTabs = rbacAllowedTabs();
+    if(allowedTabs.length && !allowedTabs.includes(uiState.currentTab)){
+      uiState.currentTab = allowedTabs[0];
+      saveUiState();
+    }
+    // 3) gray out / disable data-editing controls for users without "edit"/"delete"
+    const canEdit = rbacHasPerm('edit');
+    const canDelete = rbacHasPerm('delete');
+    document.querySelectorAll('#submitDayBtn, .item-row').forEach(el=>{
+      el.setAttribute('data-perm-locked', canEdit ? 'false' : 'true');
+    });
+    document.querySelectorAll('.btn-danger, [id^="remove"], [data-remove-group], [data-remove-item], [data-remove-student]').forEach(el=>{
+      el.setAttribute('data-perm-locked', canDelete ? 'false' : 'true');
+    });
+    rbacRenderUserBar();
+  }
+
+  // Redirect away from a disallowed tab with a friendly alert, used by setTab().
+  function rbacGuardTab(tab){
+    if(tab === 'settings'){
+      if(rbacIsAdmin()) return tab;
+      alert('تبويب "الإعدادات" مخصص للمدير فقط.');
+      return rbacAllowedTabs()[0] || 'eval';
+    }
+    if(!rbacHasPerm(tab)){
+      alert('لا تملك صلاحية الوصول إلى هذا التبويب.');
+      return rbacAllowedTabs()[0] || 'eval';
+    }
+    return tab;
+  }
+
+  // -------- Admin: user & permissions management (rendered inside Settings) --------
+  function rbacRenderUsersAdmin(){
+    if(!rbacIsAdmin()) return '';
+    const rows = rbacStore.users.map(u=>{
+      const permsHtml = RBAC_PERMISSIONS.map(p=>{
+        const checked = u.role === 'admin' ? 'checked disabled' : (u.permissions[p.key] ? 'checked' : '');
+        return `<label><input type="checkbox" data-user-perm="${u.id}:${p.key}" ${checked}> ${escapeHtml(p.label)}</label>`;
+      }).join('');
+      return `<tr data-user-row="${u.id}">
+        <td>
+          <strong>${escapeHtml(u.username)}</strong>
+          ${u.id === rbacStore.currentUserId ? ' <span class="section-hint">(أنت)</span>' : ''}
+        </td>
+        <td>
+          <select class="rbac-role-select" data-user-role="${u.id}" ${u.id===rbacStore.currentUserId?'disabled title="لا يمكنك تغيير دورك الخاص"':''}>
+            <option value="user" ${u.role==='user'?'selected':''}>مستخدم عادي</option>
+            <option value="admin" ${u.role==='admin'?'selected':''}>مدير</option>
+          </select>
+        </td>
+        <td><div class="rbac-perm-grid">${permsHtml}</div></td>
+        <td>
+          ${u.id !== rbacStore.currentUserId ? `<button class="btn btn-danger btn-sm" data-user-delete="${u.id}">حذف</button>` : ''}
+        </td>
+      </tr>`;
+    }).join('');
+
+    return `
+      <div class="card">
+        <p class="section-title">إدارة المستخدمين والصلاحيات</p>
+        <p class="section-hint">هذا القسم يظهر للمدير فقط. حدد دور كل مستخدم، وفعّل/ألغِ الصلاحيات الفردية له. تُحفظ التغييرات فورًا في هذا الجهاز (localStorage) بنفس شكل جدول Supabase المقترح أدناه.</p>
+        <div style="overflow-x:auto;">
+          <table class="rbac-users-table">
+            <thead><tr><th>المستخدم</th><th>الدور</th><th>الصلاحيات</th><th></th></tr></thead>
+            <tbody id="rbacUsersTbody">${rows}</tbody>
+          </table>
+        </div>
+        <p class="section-title" style="margin-top:16px;">إضافة مستخدم جديد</p>
+        <div class="rbac-newuser-row">
+          <input type="text" id="rbacNewUsername" placeholder="اسم المستخدم">
+          <input type="text" id="rbacNewPassword" placeholder="كلمة المرور">
+          <select class="rbac-role-select" id="rbacNewRole">
+            <option value="user" selected>مستخدم عادي</option>
+            <option value="admin">مدير</option>
+          </select>
+          <button class="btn btn-primary btn-sm" id="rbacAddUserBtn">إضافة مستخدم</button>
+        </div>
+        <p class="status-line" id="rbacUsersStatus"></p>
+      </div>
+    `;
+  }
+
+  function rbacBindUsersAdmin(root){
+    if(!rbacIsAdmin()) return;
+
+    root.querySelectorAll('[data-user-role]').forEach(sel=>{
+      sel.addEventListener('change', ()=>{
+        const id = sel.getAttribute('data-user-role');
+        const u = rbacStore.users.find(x=>x.id===id);
+        if(!u) return;
+        u.role = sel.value;
+        rbacSave(rbacStore);
+        renderSettings();      // re-render to show/hide the disabled perm checkboxes for admins
+        flashStatus('rbacUsersStatus', 'تم تحديث دور المستخدم ✓');
+      });
+    });
+
+    root.querySelectorAll('[data-user-perm]').forEach(cb=>{
+      cb.addEventListener('change', ()=>{
+        const [id, key] = cb.getAttribute('data-user-perm').split(':');
+        const u = rbacStore.users.find(x=>x.id===id);
+        if(!u) return;
+        u.permissions[key] = cb.checked;
+        rbacSave(rbacStore);
+        // live-apply to this device immediately (simulates "realtime" without a backend)
+        if(id === rbacStore.currentUserId) rbacApplyUI();
+        flashStatus('rbacUsersStatus', 'تم تحديث الصلاحيات ✓');
+      });
+    });
+
+    root.querySelectorAll('[data-user-delete]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const id = btn.getAttribute('data-user-delete');
+        const u = rbacStore.users.find(x=>x.id===id);
+        if(!u) return;
+        if(!confirm(`حذف المستخدم "${u.username}" نهائيًا؟`)) return;
+        rbacStore.users = rbacStore.users.filter(x=>x.id!==id);
+        rbacSave(rbacStore);
+        renderSettings();
+        flashStatus('rbacUsersStatus', 'تم حذف المستخدم ✓');
+      });
+    });
+
+    const addBtn = document.getElementById('rbacAddUserBtn');
+    if(addBtn) addBtn.addEventListener('click', ()=>{
+      const uname = document.getElementById('rbacNewUsername').value.trim();
+      const pwd = document.getElementById('rbacNewPassword').value;
+      const role = document.getElementById('rbacNewRole').value;
+      if(!uname || !pwd){ flashStatus('rbacUsersStatus', 'الرجاء إدخال اسم المستخدم وكلمة المرور.'); return; }
+      if(rbacStore.users.some(u=>u.username===uname)){ flashStatus('rbacUsersStatus', 'اسم المستخدم موجود مسبقًا.'); return; }
+      rbacStore.users.push({
+        id: 'u_' + uid(),
+        username: uname,
+        password: pwd,
+        role: role,
+        permissions: rbacDefaultPermissions(role==='admin'),
+        created_at: new Date().toISOString()
+      });
+      rbacSave(rbacStore);
+      renderSettings();
+      flashStatus('rbacUsersStatus', 'تمت إضافة المستخدم ✓');
+    });
+  }
 
   function defaultItems(){
     return [
@@ -699,11 +1062,29 @@
     return true;
   }
 
+  // Pushes to Supabase INSTANTLY on every change (no debounce delay).
+  // If a push is already in flight when new data comes in, we don't fire a
+  // second overlapping request — we just remember to push again the moment
+  // the current one finishes, so the very latest state always goes out
+  // immediately and requests can never race/overwrite each other.
   function queueSyncPush(){
     if(!supabaseClient) return;
-    clearTimeout(syncSaveTimer);
     setSyncStatus('saving', 'جارٍ الحفظ...');
-    syncSaveTimer = setTimeout(pushToSupabase, 400);
+    if(pushInFlight){
+      pushQueued = true;
+      return;
+    }
+    firePush();
+  }
+
+  async function firePush(){
+    pushInFlight = true;
+    await pushToSupabase();
+    pushInFlight = false;
+    if(pushQueued){
+      pushQueued = false;
+      firePush();
+    }
   }
 
   async function pushToSupabase(){
@@ -1519,7 +1900,9 @@ alter publication supabase_realtime add table ${SYNC_TABLE};</div>
     }
 
     html += `<p class="status-line" id="settingsStatus"></p>`;
+    html += rbacRenderUsersAdmin(); // RBAC: admin-only "إدارة المستخدمين والصلاحيات" panel
     root.innerHTML = html;
+    rbacBindUsersAdmin(root);
 
     // group management
     root.querySelectorAll('[data-group-name]').forEach(inp=>{
@@ -1695,6 +2078,7 @@ alter publication supabase_realtime add table ${SYNC_TABLE};</div>
 
   // ---------- tabs ----------
   function setTab(tab){
+    tab = rbacGuardTab(tab); // RBAC: redirects to an allowed tab (+ alert) if not permitted
     uiState.currentTab = tab;
     saveUiState(); // local-only persistence; never touches Supabase
     document.querySelectorAll('.tab-btn').forEach(b=> b.classList.toggle('active', b.getAttribute('data-tab')===tab));
@@ -1702,6 +2086,7 @@ alter publication supabase_realtime add table ${SYNC_TABLE};</div>
     document.getElementById('tabResultsWrap').style.display = tab==='results' ? 'block':'none';
     document.getElementById('tabArchiveWrap').style.display = tab==='archive' ? 'block':'none';
     document.getElementById('tabSettingsWrap').style.display = tab==='settings' ? 'block':'none';
+    rbacApplyUI();
   }
 
   function renderAll(){
@@ -1710,6 +2095,7 @@ alter publication supabase_realtime add table ${SYNC_TABLE};</div>
     renderResults();
     renderArchive();
     renderSettings();
+    rbacApplyUI(); // RBAC: hide/disable tabs & controls per the logged-in user
   }
 
   document.querySelectorAll('.tab-btn').forEach(btn=>{
@@ -1718,13 +2104,40 @@ alter publication supabase_realtime add table ${SYNC_TABLE};</div>
 
   document.getElementById('syncGotoSettings').addEventListener('click', ()=> setTab('settings'));
 
-  (async function init(){
+  // ---------- RBAC: login screen wiring ----------
+  function rbacDoLogin(){
+    const uname = document.getElementById('rbacUsername').value.trim();
+    const pwd = document.getElementById('rbacPassword').value;
+    if(!uname || !pwd){ rbacShowLogin('الرجاء إدخال اسم المستخدم وكلمة المرور.'); return; }
+    if(rbacLogin(uname, pwd)){
+      rbacHideLogin();
+      startAppAfterLogin();
+    } else {
+      rbacShowLogin('اسم المستخدم أو كلمة المرور غير صحيحة.');
+    }
+  }
+  document.getElementById('rbacLoginBtn').addEventListener('click', rbacDoLogin);
+  ['rbacUsername','rbacPassword'].forEach(id=>{
+    document.getElementById(id).addEventListener('keydown', e=>{ if(e.key==='Enter') rbacDoLogin(); });
+  });
+
+  async function startAppAfterLogin(){
     if(!storageAvailable()) showStorageWarning();
     await loadState();     // DATA — will also be synced with Supabase
     loadUiState();          // NAVIGATION — local to this device only, restores last tab/group viewed here
-    setTab(uiState.currentTab || 'eval');
+    const allowed = rbacAllowedTabs();
+    const startTab = allowed.includes(uiState.currentTab) ? uiState.currentTab : (allowed[0] || 'eval');
+    setTab(startTab || 'eval');
     renderAll();
     connectSync();
+  }
+
+  (function init(){
+    if(rbacCurrentUser()){
+      startAppAfterLogin();
+    } else {
+      rbacShowLogin('');
+    }
   })();
 
 })();
