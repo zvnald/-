@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>برنامج نقاط التجميع الشهري</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Cairo:wght@600;700;800&family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<style>
+  :root{
+    --espresso:#2b1c13;
+    --coffee:#4a3020;
+    --cinnamon:#7a5236;
+    --caramel:#a8794f;
+    --latte:#cba573;
+    --sand:#e7d7bd;
+    --linen:#f6efe3;
+    --paper:#fffdfa;
+
+    --bg:#f7efe2;
+    --bg-2:#fdfbf8;
+    --panel:var(--paper);
+    --panel-2:var(--linen);
+    --line: rgba(74,48,32,0.14);
+    --gold:var(--caramel);
+    --gold-soft: rgba(168,121,79,0.16);
+    --mint:var(--cinnamon);
+    --mint-soft: rgba(122,82,54,0.13);
+    --text:var(--espresso);
+    --text-dim: rgba(43,28,19,0.62);
+    --text-dim2: rgba(43,28,19,0.4);
+    --danger:#a8483d;
+    --danger-soft: rgba(168,72,61,0.14);
+    --silver:#c9bfa9;
+    --bronze:#b9835a;
+    --r-card:18px;
+    --r-chip:999px;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background-image:
+      url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='150' height='150' viewBox='0 0 150 150'><g fill='none' stroke='%234a3020' stroke-opacity='0.06' stroke-width='1.2'><path d='M75 10 L90 56 L136 71 L90 86 L75 132 L60 86 L14 71 L60 56 Z'/><circle cx='75' cy='71' r='22'/><circle cx='75' cy='71' r='34'/></g></svg>"),
+      linear-gradient(180deg, #ffffff 0%, #fdfbf8 35%, #f7efe2 100%);
+    background-repeat: repeat, no-repeat;
+    background-size: 150px 150px, 100% 100%;
+    background-attachment: fixed, scroll;
+    color:var(--text);
+    font-family:'Tajawal', sans-serif;
+    min-height:100vh;
+    padding:28px 18px 60px;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  h1,h2,h3,.brand{ font-family:'Cairo', sans-serif; }
+  .wrap{ max-width:920px; margin:0 auto; }
+
+  .warn-bar{
+    background:var(--danger-soft); border:1px solid var(--danger); color:var(--danger);
+    border-radius:14px; padding:12px 16px; margin-bottom:16px; font-size:13.5px;
+  }
+
+  /* ---------- Sync status ---------- */
+  .sync-bar{
+    display:flex; align-items:center; gap:8px; justify-content:flex-end;
+    font-size:12.5px; color:var(--text-dim); margin-bottom:10px;
+  }
+  .sync-dot{ width:8px; height:8px; border-radius:50%; background:var(--text-dim2); flex-shrink:0; transition: background .2s ease; }
+  .sync-dot.ok{ background:var(--mint); box-shadow:0 0 0 3px var(--mint-soft); }
+  .sync-dot.saving{ background:var(--gold); box-shadow:0 0 0 3px var(--gold-soft); }
+  .sync-dot.err{ background:var(--danger); box-shadow:0 0 0 3px var(--danger-soft); }
+  .sync-link{ color:var(--cinnamon); font-weight:700; cursor:pointer; text-decoration:underline; background:none; border:none; font-family:'Tajawal',sans-serif; font-size:12.5px; padding:0; }
+
+  /* ---------- Hero ---------- */
+  .hero{
+    position:relative; overflow:hidden;
+    background: linear-gradient(150deg, var(--espresso) 0%, var(--coffee) 55%, var(--cinnamon) 100%);
+    border:none;
+    border-radius: 22px;
+    padding:26px 26px 22px;
+    display:flex; flex-wrap:wrap; gap:22px; justify-content:space-between; align-items:center;
+    box-shadow: 0 16px 34px rgba(43,28,19,0.28);
+  }
+  .hero::before{
+    content:""; position:absolute; inset:0; pointer-events:none;
+    background-image: radial-gradient(circle at 85% -10%, rgba(203,165,115,0.35), transparent 55%),
+                       radial-gradient(circle at 8% 115%, rgba(203,165,115,0.22), transparent 55%);
+  }
+  .hero-title{ font-family:'Amiri', serif; font-size:24px; font-weight:700; margin:0 0 6px; color:var(--paper); position:relative; }
+  .hero-group{ font-size:12.5px; color:var(--latte); font-weight:700; margin:0 0 4px; position:relative; }
+  .hero-sub{ color:var(--sand); font-size:14.5px; margin:0; position:relative; }
+  .stamp-grid{ display:flex; gap:10px; position:relative; }
+  .stamp-week{ display:flex; flex-direction:column; gap:6px; align-items:center; }
+  .stamp-week-label{ font-size:11px; color:var(--sand); opacity:.7; }
+  .stamp-days{ display:grid; grid-template-columns:repeat(2,16px); grid-template-rows:repeat(2,16px); gap:5px; }
+  .stamp{
+    width:16px; height:16px; border-radius:5px;
+    border:1.5px solid rgba(244,239,227,0.28);
+    background: transparent;
+  }
+  .stamp.done{ background:var(--latte); border-color:var(--latte); box-shadow:0 0 0 3px rgba(203,165,115,0.3); }
+  .stamp.current{ border-color:var(--sand); box-shadow:0 0 0 3px rgba(231,215,189,0.25); }
+  .stamp.selected{ outline:2px solid var(--paper); outline-offset:2px; }
+  .hero-mascot{ position:relative; flex-shrink:0; display:flex; align-items:flex-end; }
+
+  /* ---------- Day navigator ---------- */
+  .day-row{ display:flex; flex-wrap:wrap; gap:7px; }
+  .day-chip{
+    width:34px; height:34px; border-radius:10px; border:1.5px solid var(--line);
+    background:var(--panel-2); color:var(--text-dim); font-family:'Tajawal',sans-serif;
+    font-weight:700; font-size:13px; cursor:pointer;
+  }
+  .day-chip.current{ border-color:var(--mint); color:var(--mint); }
+  .day-chip.selected{ background:var(--gold); color:var(--espresso); border-color:var(--gold); }
+  .day-chip.disabled{ opacity:.3; cursor:not-allowed; }
+
+  /* ---------- Tabs ---------- */
+  .tabs{
+    display:flex; gap:6px; margin:22px 0 20px; flex-wrap:wrap;
+    background:var(--panel-2); border:1px solid var(--line); border-radius:18px; padding:4px;
+    box-shadow: inset 0 1px 3px rgba(74,48,32,0.08);
+  }
+  .tab-btn{
+    flex:1; min-width:110px;
+    font-family:'Tajawal',sans-serif; font-weight:700; font-size:14.5px;
+    background:transparent; color:var(--cinnamon); border:none;
+    padding:10px 12px; border-radius:14px; cursor:pointer;
+    transition: all .15s ease;
+  }
+  .tab-btn:hover{ color:var(--espresso); }
+  .tab-btn.active{ background:linear-gradient(135deg, var(--coffee), var(--espresso)); color:var(--paper); box-shadow: 0 5px 14px rgba(43,28,19,0.3); }
+
+  .card{
+    background:var(--panel); border:1px solid var(--line); border-radius:var(--r-card);
+    padding:20px 20px 22px;
+  }
+  .card + .card{ margin-top:16px; }
+  .section-title{ font-size:15px; font-weight:700; margin:0 0 4px; }
+  .section-hint{ color:var(--text-dim); font-size:13px; margin:0 0 14px; }
+
+  /* ---------- Roster / group pills ---------- */
+  .roster-grid{ display:flex; flex-wrap:wrap; gap:10px; }
+  .pill{
+    display:flex; align-items:center; gap:8px;
+    background:var(--panel-2); border:1.5px solid var(--line); color:var(--text);
+    padding:9px 14px 9px 10px; border-radius:var(--r-chip); cursor:pointer;
+    font-size:14px; font-weight:500; transition: all .15s ease;
+  }
+  .pill:hover{ border-color:var(--text-dim); }
+  .pill.active{ border-color:var(--mint); background:var(--mint-soft); }
+  .pill-dot{ width:9px; height:9px; border-radius:50%; border:1.5px solid var(--text-dim2); flex-shrink:0; }
+  .pill.marked .pill-dot{ background:var(--gold); border-color:var(--gold); }
+  .empty-state{ color:var(--text-dim); font-size:14px; padding:14px 4px; }
+
+  /* ---------- Detail panel ---------- */
+  .detail-head{ display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:10px; flex-wrap:wrap; }
+  .detail-name{ font-size:18px; font-weight:800; font-family:'Cairo',sans-serif; }
+  .nav-mini{ display:flex; align-items:center; gap:10px; font-size:13px; color:var(--text-dim); }
+  .icon-btn{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    width:32px; height:32px; border-radius:10px; cursor:pointer; font-size:15px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .icon-btn:disabled{ opacity:.35; cursor:not-allowed; }
+  .item-row{
+    display:flex; align-items:center; justify-content:space-between;
+    padding:13px 14px; border-radius:12px; border:1.5px solid var(--line);
+    margin-bottom:9px; cursor:pointer; transition: all .12s ease; background: rgba(255,255,255,0.02);
+  }
+  .item-row:hover{ border-color: var(--text-dim); }
+  .item-row.on{ background:var(--gold-soft); border-color:var(--gold); }
+  .item-name{ font-size:15px; font-weight:500; }
+  .item-points{ font-size:12.5px; color:var(--text-dim); font-weight:700; }
+  .item-row.on .item-points{ color:var(--gold); }
+  .item-row.negative .item-points{ color: var(--danger); }
+  .item-row.negative.on{ background:var(--danger-soft); border-color:var(--danger); }
+  .item-row.negative.on .item-points{ color:var(--danger); }
+  .item-row.negative.on .check-circle{ background:var(--danger); border-color:var(--danger); }
+  .type-tag{ font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:999px; margin-inline-start:8px; }
+  .type-tag.pos{ background:var(--mint-soft); color:var(--mint); }
+  .type-tag.neg{ background:var(--danger-soft); color:var(--danger); }
+  .seg{ display:flex; border:1.5px solid var(--line); border-radius:10px; overflow:hidden; }
+  .seg button{ font-family:'Tajawal',sans-serif; font-size:13px; font-weight:700; padding:9px 14px; background:var(--panel-2); color:var(--text-dim); border:none; cursor:pointer; }
+  .seg button.on{ background:var(--gold); color:var(--espresso); }
+  .seg button.on.neg{ background:var(--danger); color:#fff; }
+  .check-circle{
+    width:22px; height:22px; border-radius:7px; border:1.8px solid var(--text-dim2);
+    display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  }
+  .item-row.on .check-circle{ background:var(--gold); border-color:var(--gold); color:var(--espresso); font-weight:800; font-size:13px; }
+
+  .btn{
+    font-family:'Tajawal',sans-serif; font-weight:700; font-size:14px; cursor:pointer;
+    border-radius:var(--r-chip); padding:11px 20px; border:1px solid transparent;
+    transition: transform .1s ease, opacity .15s ease;
+  }
+  .btn:active{ transform: scale(0.98); }
+  .btn-primary{ background:var(--gold); color:var(--espresso); }
+  .btn-ghost{ background:transparent; color:var(--text); border-color:var(--line); }
+  .btn-danger{ background:var(--danger-soft); color:var(--danger); border-color: var(--danger); }
+  .btn-mint{ background:var(--mint); color:var(--paper); }
+  .btn:disabled{ opacity:.4; cursor:not-allowed; }
+  .btn-sm{ padding:7px 13px; font-size:12.5px; }
+
+  .submit-bar{
+    margin-top:18px; padding-top:16px; border-top:1px dashed var(--line);
+    display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  }
+  .submit-note{ font-size:12.5px; color:var(--text-dim); }
+
+  /* ---------- Results ---------- */
+  .rank-row{
+    display:flex; align-items:center; gap:14px; padding:13px 6px; border-bottom:1px solid var(--line);
+  }
+  .rank-num{
+    width:30px; height:30px; border-radius:9px; display:flex; align-items:center; justify-content:center;
+    font-family:'Cairo',sans-serif; font-weight:800; font-size:13.5px; flex-shrink:0;
+    background:var(--panel-2); color:var(--text-dim);
+  }
+  .rank-row.r1 .rank-num{ background:var(--gold); color:var(--espresso); }
+  .rank-row.r2 .rank-num{ background:var(--silver); color:var(--espresso); }
+  .rank-row.r3 .rank-num{ background:var(--bronze); color:var(--espresso); }
+  .rank-body{ flex:1; min-width:0; }
+  .rank-name{ font-weight:700; font-size:14.5px; margin-bottom:6px; }
+  .rank-bar-bg{ background:var(--panel-2); border-radius:999px; height:7px; overflow:hidden; }
+  .rank-bar-fill{ height:100%; background: linear-gradient(90deg, var(--mint), var(--gold)); border-radius:999px; }
+  .rank-points{ font-family:'Cairo',sans-serif; font-weight:800; font-size:15px; min-width:64px; text-align:left; }
+  .rank-points small{ font-size:11px; color:var(--text-dim); font-weight:500; }
+  .expand-arrow{ color:var(--text-dim); font-size:13px; transition: transform .15s ease; flex-shrink:0; }
+  .expand-arrow.open{ transform: rotate(180deg); }
+
+  .breakdown-wrap{
+    margin:2px 0 14px; padding:14px 16px; background:var(--panel-2); border-radius:12px; border:1px solid var(--line);
+  }
+  .breakdown-row{ display:flex; align-items:center; gap:12px; padding:8px 0; border-bottom:1px dashed var(--line); }
+  .breakdown-row:last-child{ border-bottom:none; }
+  .breakdown-name{ width:150px; flex-shrink:0; font-size:13px; font-weight:600; }
+  .breakdown-bar-bg{ flex:1; height:6px; background:rgba(74,48,32,0.09); border-radius:999px; overflow:hidden; }
+  .breakdown-bar-fill{ height:100%; background:linear-gradient(90deg,var(--mint),var(--gold)); border-radius:999px; }
+  .breakdown-bar-fill.neg{ background:var(--danger); }
+  .breakdown-meta{ width:120px; text-align:left; font-size:11.5px; color:var(--text-dim); flex-shrink:0; }
+  .breakdown-pts{ width:44px; text-align:left; font-weight:800; font-family:'Cairo',sans-serif; font-size:13px; flex-shrink:0; }
+  .breakdown-pts.neg{ color:var(--danger); }
+
+  /* ---------- Comparison table ---------- */
+  .cmp-table-wrap{ overflow-x:auto; margin-top:14px; }
+  .cmp-table{ border-collapse:collapse; width:100%; min-width:420px; font-size:13px; }
+  .cmp-table th, .cmp-table td{ padding:9px 10px; text-align:center; border-bottom:1px solid var(--line); }
+  .cmp-table thead th{ color:var(--text-dim); font-weight:700; font-size:11.5px; }
+  .cmp-item-name{ text-align:right !important; font-weight:600; white-space:nowrap; }
+  .cmp-pct{ font-weight:700; }
+  .cmp-pct.neg{ color:var(--danger); }
+  .cmp-totals-row td{ font-weight:800; border-top:1.5px solid var(--line); }
+
+  .archive-card .rank-row:last-child{ border-bottom:none; }
+
+  /* ---------- Settings ---------- */
+  .list-row{
+    display:flex; align-items:center; gap:10px; padding:10px 4px; border-bottom:1px solid var(--line);
+  }
+  .list-row:last-child{ border-bottom:none; }
+  .field{
+    background:var(--panel-2); border:1.5px solid var(--line); color:var(--text);
+    border-radius:10px; padding:9px 12px; font-family:'Tajawal',sans-serif; font-size:14px;
+  }
+  .field:focus{ outline:none; border-color:var(--mint); }
+  .field-name{ flex:1; min-width:100px; }
+  .field-points{ width:76px; text-align:center; }
+  .add-form{ display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .add-form .field-name{ flex:1; min-width:140px; }
+  .settings-foot{ display:flex; gap:10px; flex-wrap:wrap; margin-top:6px; }
+  .status-line{ font-size:13px; color:var(--mint); min-height:18px; margin-top:10px; }
+  .editing-header{ font-size:13.5px; font-weight:700; color:var(--gold); margin:26px 4px 10px; }
+
+  .sql-box{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:12px;
+    padding:12px 14px; font-family:monospace; font-size:12px; color:var(--coffee);
+    white-space:pre-wrap; direction:ltr; text-align:left; margin:10px 0; user-select:all;
+  }
+  .sync-code-display{
+    display:flex; align-items:center; gap:10px; background:var(--gold-soft);
+    border:1.5px solid var(--gold); border-radius:12px; padding:10px 14px; margin:10px 0;
+  }
+  .sync-code-display strong{ font-family:'Cairo',sans-serif; font-size:18px; letter-spacing:2px; color:var(--coffee); }
+  .sync-field-row{ display:flex; flex-direction:column; gap:8px; margin-top:12px; }
+  .sync-field-row label{ font-size:12.5px; font-weight:700; color:var(--coffee); }
+  details.sync-help{ margin-top:10px; }
+  details.sync-help summary{ cursor:pointer; font-size:13px; font-weight:700; color:var(--cinnamon); }
+
+  @media (max-width:600px){
+    .hero{ flex-direction:column; align-items:flex-start; }
+    .stamp-grid{ align-self:center; }
+    .rank-points{ text-align:left; }
+    .hero-mascot{ display:none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="warnHost"></div>
+
+  <div class="sync-bar">
+    <span class="sync-dot" id="syncDot"></span>
+    <span id="syncText">غير متصل بالمزامنة</span>
+    <button class="sync-link" id="syncGotoSettings">تفاصيل</button>
+  </div>
+
+  <div class="hero">
+    <div>
+      <p class="hero-group" id="heroGroupName"></p>
+      <p class="hero-title">برنامج نقاط التجميع الشهري</p>
+      <p class="hero-sub" id="heroSub">دورة: ٤ أسابيع × ٤ أيام — جارِ التحميل…</p>
+    </div>
+    <div class="stamp-grid" id="stampGrid"></div>
+    <div class="hero-mascot" aria-hidden="true">
+      <svg viewBox="0 0 120 170" width="86" height="122">
+        <ellipse cx="60" cy="162" rx="34" ry="7" fill="rgba(0,0,0,0.18)"/>
+        <path d="M40 70 L36 150 Q60 160 84 150 L80 70 Z" fill="var(--paper)"/>
+        <circle cx="60" cy="82" r="2" fill="var(--latte)"/>
+        <circle cx="60" cy="92" r="2" fill="var(--latte)"/>
+        <circle cx="60" cy="102" r="2" fill="var(--latte)"/>
+        <path d="M40 90 Q28 100 34 118" stroke="var(--paper)" stroke-width="10" fill="none" stroke-linecap="round"/>
+        <path d="M80 90 Q92 100 86 118" stroke="var(--paper)" stroke-width="10" fill="none" stroke-linecap="round"/>
+        <rect x="46" y="106" width="28" height="20" rx="2" fill="var(--cinnamon)"/>
+        <rect x="48" y="109" width="24" height="2" fill="var(--sand)"/>
+        <rect x="48" y="114" width="24" height="2" fill="var(--sand)"/>
+        <rect x="48" y="119" width="16" height="2" fill="var(--sand)"/>
+        <rect x="54" y="58" width="12" height="14" fill="#e8b98a"/>
+        <circle cx="60" cy="46" r="24" fill="#f2c9a0"/>
+        <path d="M36 40 Q34 16 60 16 Q86 16 84 40 Q84 30 74 28 Q66 34 60 28 Q54 34 46 28 Q36 30 36 40Z" fill="var(--espresso)"/>
+        <circle cx="52" cy="48" r="2.4" fill="var(--espresso)"/>
+        <circle cx="68" cy="48" r="2.4" fill="var(--espresso)"/>
+        <path d="M52 56 Q60 62 68 56" stroke="var(--coffee)" stroke-width="2" fill="none" stroke-linecap="round"/>
+        <circle cx="46" cy="53" r="3" fill="rgba(216,120,100,0.35)"/>
+        <circle cx="74" cy="53" r="3" fill="rgba(216,120,100,0.35)"/>
+      </svg>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn" data-tab="eval">التقييم اليومي</button>
+    <button class="tab-btn" data-tab="results">النتائج</button>
+    <button class="tab-btn" data-tab="archive">الأرشيف والمقارنة</button>
+    <button class="tab-btn" data-tab="settings">الإعدادات</button>
+  </div>
+
+  <div id="tabEval"></div>
+  <div id="tabResults" style="display:none"></div>
+  <div id="tabArchive" style="display:none"></div>
+  <div id="tabSettings" style="display:none"></div>
+
+</div>
+
+<script>
+(function(){
+
+  const STORAGE_KEY = 'points-program-state-v2';
+  const OLD_STORAGE_KEY = 'points-program-state';
+  const SYNC_TABLE = 'points_app_state';
+  // ---- Built-in Supabase connection: always on, no setup needed on any device ----
+  const BUILTIN_SUPABASE_URL = 'https://mvyebpnhvivbkmvzdqaa.supabase.co';
+  const BUILTIN_SUPABASE_ANON_KEY = 'sb_publishable_VpFzoJG-rj8mdQzDGrQg5A_qN3hT-7W';
+  const BUILTIN_SYNC_ID = 'halaqa-points-main';
+  let state = null;
+  let currentTab = 'eval';
+
+  // transient (not persisted) view state
+  let activeStudentId = null;
+  let selectedDay = null;
+  let expandedStudentId = null;
+  let compareStudentId = null;
+
+  // ---- sync (Supabase) transient state ----
+  let supabaseClient = null;
+  let syncChannel = null;
+  let syncSaveTimer = null;
+  let lastPushedJSON = null;   // used to ignore realtime echoes of our own writes
+  let isApplyingRemote = false;
+
+  const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+
+  function defaultItems(){
+    return [
+      { id: uid(), name: 'الحضور والالتزام بالوقت', points: 5 },
+      { id: uid(), name: 'حل الواجب', points: 10 },
+      { id: uid(), name: 'المشاركة الصفية', points: 5 },
+      { id: uid(), name: 'السلوك الإيجابي', points: 5 },
+    ];
+  }
+
+  function newGroup(name){
+    return {
+      id: uid(),
+      name: name || 'حلقة جديدة',
+      items: defaultItems(),
+      students: [],
+      currentDay: 1,
+      todayEntries: {},
+      records: {},
+      resetAt: {},
+      archives: []
+    };
+  }
+
+  function defaultState(){
+    const g = newGroup('الحلقة الأولى');
+    return {
+      groups: [g],
+      evalGroupId: g.id,
+      resultsGroupId: g.id,
+      archiveGroupId: g.id,
+      settingsGroupId: g.id
+    };
+  }
+
+  function ensureGroupShape(g){
+    if(!g.items) g.items = [];
+    if(!g.students) g.students = [];
+    if(!g.records) g.records = {};
+    if(!g.todayEntries) g.todayEntries = {};
+    if(!g.resetAt) g.resetAt = {};
+    if(!g.archives) g.archives = [];
+    if(!g.currentDay) g.currentDay = 1;
+  }
+
+  async function loadState(){
+    let raw = null;
+    try{ raw = localStorage.getItem(STORAGE_KEY); }catch(e){ raw = null; }
+
+    if(raw){
+      try{ state = JSON.parse(raw); }catch(e){ state = null; }
+    }
+
+    if(!state){
+      // try migrating the old single-circle schema
+      let oldRaw = null;
+      try{ oldRaw = localStorage.getItem(OLD_STORAGE_KEY); }catch(e){ oldRaw = null; }
+      if(oldRaw){
+        try{
+          const old = JSON.parse(oldRaw);
+          const g = {
+            id: uid(),
+            name: 'الحلقة الأولى',
+            items: old.items || defaultItems(),
+            students: old.students || [],
+            currentDay: old.currentDay || 1,
+            todayEntries: old.todayEntries || {},
+            records: old.records || {},
+            resetAt: old.resetAt || {},
+            archives: old.archives || []
+          };
+          state = { groups:[g], evalGroupId:g.id, resultsGroupId:g.id, archiveGroupId:g.id, settingsGroupId:g.id };
+        }catch(e){ state = null; }
+      }
+    }
+
+    if(!state) state = defaultState();
+    if(!Array.isArray(state.groups)) state.groups = [];
+    state.groups.forEach(ensureGroupShape);
+    if(state.groups.length === 0) state.groups.push(newGroup('الحلقة الأولى'));
+    const firstId = state.groups[0].id;
+    if(!state.evalGroupId || !state.groups.find(g=>g.id===state.evalGroupId)) state.evalGroupId = firstId;
+    if(!state.resultsGroupId || !state.groups.find(g=>g.id===state.resultsGroupId)) state.resultsGroupId = firstId;
+    if(!state.archiveGroupId || !state.groups.find(g=>g.id===state.archiveGroupId)) state.archiveGroupId = firstId;
+    if(!state.settingsGroupId || !state.groups.find(g=>g.id===state.settingsGroupId)) state.settingsGroupId = firstId;
+
+    await saveState();
+  }
+
+  async function saveState(){
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ /* best-effort */ }
+    if(!isApplyingRemote) queueSyncPush();
+  }
+
+  function getGroup(id){ return state.groups.find(g=>g.id===id) || null; }
+
+  // ================= Supabase sync =================
+  function loadSyncConfig(){
+    return { url: BUILTIN_SUPABASE_URL, anonKey: BUILTIN_SUPABASE_ANON_KEY, syncId: BUILTIN_SYNC_ID };
+  }
+
+  function setSyncStatus(kind, text){
+    const dot = document.getElementById('syncDot');
+    const txt = document.getElementById('syncText');
+    if(dot) dot.className = 'sync-dot' + (kind ? ' ' + kind : '');
+    if(txt) txt.textContent = text;
+  }
+
+  function ensureStateShapeFull(s){
+    if(!s || !Array.isArray(s.groups)) return false;
+    s.groups.forEach(ensureGroupShape);
+    if(s.groups.length === 0) s.groups.push(newGroup('الحلقة الأولى'));
+    const firstId = s.groups[0].id;
+    if(!s.evalGroupId || !s.groups.find(g=>g.id===s.evalGroupId)) s.evalGroupId = firstId;
+    if(!s.resultsGroupId || !s.groups.find(g=>g.id===s.resultsGroupId)) s.resultsGroupId = firstId;
+    if(!s.archiveGroupId || !s.groups.find(g=>g.id===s.archiveGroupId)) s.archiveGroupId = firstId;
+    if(!s.settingsGroupId || !s.groups.find(g=>g.id===s.settingsGroupId)) s.settingsGroupId = firstId;
+    return true;
+  }
+
+  function queueSyncPush(){
+    if(!supabaseClient) return;
+    clearTimeout(syncSaveTimer);
+    setSyncStatus('saving', 'جارٍ الحفظ...');
+    syncSaveTimer = setTimeout(pushToSupabase, 400);
+  }
+
+  async function pushToSupabase(){
+    const cfg = loadSyncConfig();
+    if(!supabaseClient || !cfg) return;
+    try{
+      const snapshot = JSON.stringify(state);
+      lastPushedJSON = snapshot;
+      const { error } = await supabaseClient
+        .from(SYNC_TABLE)
+        .upsert({ sync_id: cfg.syncId, data: state, updated_at: new Date().toISOString() }, { onConflict: 'sync_id' });
+      if(error) throw error;
+      setSyncStatus('ok', 'تمت المزامنة ✓');
+    }catch(e){
+      console.error('sync push failed', e);
+      const msg = (e && (e.message || e.error_description || e.hint)) || 'خطأ غير معروف';
+      setSyncStatus('err', 'تعذّر الحفظ: ' + msg);
+    }
+  }
+
+  function subscribeRealtime(cfg){
+    if(syncChannel){
+      try{ supabaseClient.removeChannel(syncChannel); }catch(e){ /* ignore */ }
+      syncChannel = null;
+    }
+    syncChannel = supabaseClient
+      .channel('sync-' + cfg.syncId)
+      .on('postgres_changes', {
+        event: '*', schema: 'public', table: SYNC_TABLE, filter: `sync_id=eq.${cfg.syncId}`
+      }, (payload) => {
+        const incoming = payload.new && payload.new.data;
+        if(!incoming) return;
+        const incomingJSON = JSON.stringify(incoming);
+        if(incomingJSON === lastPushedJSON) return; // our own write echoed back
+        isApplyingRemote = true;
+        state = incoming;
+        ensureStateShapeFull(state);
+        try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ /* best-effort */ }
+        isApplyingRemote = false;
+        renderAll();
+        setSyncStatus('ok', 'تحديث من جهاز آخر ✓');
+      })
+      .subscribe();
+  }
+
+  async function connectSync(){
+    const cfg = loadSyncConfig();
+    if(!cfg || !cfg.url || !cfg.anonKey || !cfg.syncId){
+      setSyncStatus(null, 'غير متصل بالمزامنة');
+      return;
+    }
+    if(typeof window.supabase === 'undefined' || !window.supabase.createClient){
+      setSyncStatus('err', 'تعذّر تحميل مكتبة المزامنة');
+      return;
+    }
+    try{
+      setSyncStatus('saving', 'جارٍ الاتصال...');
+      supabaseClient = window.supabase.createClient(cfg.url, cfg.anonKey);
+      const { data, error } = await supabaseClient
+        .from(SYNC_TABLE)
+        .select('data,updated_at')
+        .eq('sync_id', cfg.syncId)
+        .maybeSingle();
+      if(error) throw error;
+
+      if(data && data.data){
+        isApplyingRemote = true;
+        state = data.data;
+        ensureStateShapeFull(state);
+        try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ /* best-effort */ }
+        isApplyingRemote = false;
+        renderAll();
+      }else{
+        await pushToSupabase();
+      }
+      subscribeRealtime(cfg);
+      setSyncStatus('ok', 'متزامن تلقائيًا ✓');
+    }catch(e){
+      console.error('sync connect failed', e);
+      const msg = (e && (e.message || e.error_description || e.hint)) || 'خطأ غير معروف';
+      setSyncStatus('err', 'تعذّر الاتصال: ' + msg);
+      const dot = document.getElementById('syncDot');
+      if(dot) dot.title = msg;
+    }
+  }
+
+  // ---------- points math ----------
+  function pointsMap(group){
+    const m = {};
+    group.items.forEach(it => m[it.id] = it.points);
+    return m;
+  }
+
+  function studentTotal(group, studentId){
+    const recs = group.records[studentId] || {};
+    const resetAt = group.resetAt[studentId] || 0;
+    const pmap = pointsMap(group);
+    let total = 0;
+    Object.keys(recs).forEach(dayStr => {
+      const day = Number(dayStr);
+      if(day > resetAt){
+        (recs[dayStr] || []).forEach(itemId => { total += (pmap[itemId] || 0); });
+      }
+    });
+    return total;
+  }
+
+  function weekOf(day){ return Math.ceil(day/4); }
+  function dayInWeekOf(day){ return ((day-1)%4)+1; }
+  function maxReachableDay(group){ return Math.min(group.currentDay, 16); }
+  function isStagingDay(group, day){ return day === group.currentDay && group.currentDay <= 16; }
+  function dayLabel(day){ return `الأسبوع ${weekOf(day)} · اليوم ${dayInWeekOf(day)} من ٤ (اليوم ${day} من ١٦)`; }
+
+  function getDayList(group, day, studentId){
+    if(isStagingDay(group, day)) return group.todayEntries[studentId] || [];
+    const recs = group.records[studentId] || {};
+    return recs[day] || [];
+  }
+  function setDayList(group, day, studentId, list){
+    if(isStagingDay(group, day)){
+      group.todayEntries[studentId] = list;
+    }else{
+      if(!group.records[studentId]) group.records[studentId] = {};
+      group.records[studentId][day] = list;
+    }
+  }
+
+  function studentItemBreakdown(group, studentId){
+    const recs = group.records[studentId] || {};
+    const resetAt = group.resetAt[studentId] || 0;
+    const includedDays = Object.keys(recs).map(Number).filter(d => d > resetAt);
+    const totalDays = includedDays.length;
+    const counts = {};
+    group.items.forEach(it => counts[it.id] = 0);
+    includedDays.forEach(d=>{
+      (recs[d] || []).forEach(itemId=>{ if(counts.hasOwnProperty(itemId)) counts[itemId]++; });
+    });
+    return { totalDays, counts };
+  }
+
+  function currentMonthSnapshot(group){
+    const items = group.items.map(it => ({ id:it.id, name:it.name, points:it.points }));
+    const students = group.students.map(s=>{
+      const { totalDays, counts } = studentItemBreakdown(group, s.id);
+      return { id:s.id, name:s.name, total: studentTotal(group, s.id), totalDays, counts };
+    });
+    return { id:'current', label:'الشهر الحالي (جارٍ)', endDate:null, items, students, inProgress:true };
+  }
+
+  function archiveGroupMonth(group, label){
+    const snap = currentMonthSnapshot(group);
+    group.archives.push({ id: uid(), label, endDate: new Date().toISOString(), items: snap.items, students: snap.students });
+  }
+
+  // ---------- shared helpers ----------
+  function escapeHtml(str){
+    return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function escapeAttr(str){ return escapeHtml(str); }
+
+  function trophyIcon(){
+    return `<svg viewBox="0 0 24 24" width="16" height="16" style="display:block;">
+      <path d="M6 4h12v2a6 6 0 0 1-6 6 6 6 0 0 1-6-6V4z" fill="currentColor"/>
+      <path d="M6 4H3a3 3 0 0 0 3 5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+      <path d="M18 4h3a3 3 0 0 1-3 5" stroke="currentColor" stroke-width="1.4" fill="none"/>
+      <rect x="10" y="12" width="4" height="4" fill="currentColor"/>
+      <rect x="7" y="18" width="10" height="2" rx="1" fill="currentColor"/>
+    </svg>`;
+  }
+  function openBookIcon(){
+    return `<svg viewBox="0 0 64 48" width="52" height="40" style="display:block; margin:0 auto 8px;">
+      <path d="M32 8 C24 4 12 4 6 8 V38 C12 34 24 34 32 38 C40 34 52 34 58 38 V8 C52 4 40 4 32 8Z" fill="var(--panel-2)" stroke="var(--gold)" stroke-width="2"/>
+      <line x1="32" y1="8" x2="32" y2="38" stroke="var(--gold)" stroke-width="2"/>
+      <line x1="12" y1="14" x2="24" y2="12" stroke="var(--cinnamon)" stroke-width="1.5"/>
+      <line x1="12" y1="20" x2="24" y2="18" stroke="var(--cinnamon)" stroke-width="1.5"/>
+      <line x1="40" y1="12" x2="52" y2="14" stroke="var(--cinnamon)" stroke-width="1.5"/>
+      <line x1="40" y1="18" x2="52" y2="20" stroke="var(--cinnamon)" stroke-width="1.5"/>
+    </svg>`;
+  }
+
+  function flashStatus(id, text){
+    const el = document.getElementById(id);
+    if(el){ el.textContent = text; setTimeout(()=>{ if(el) el.textContent=''; }, 2500); }
+  }
+
+  function groupPickerHtml(activeId){
+    if(state.groups.length === 0) return `<div class="empty-state" style="text-align:center;">${openBookIcon()}لا توجد حلقات بعد — أضف واحدة من تبويب «الإعدادات».</div>`;
+    return `<div class="roster-grid">${state.groups.map(g=>`<button class="pill ${g.id===activeId?'active':''}" data-group="${g.id}">${escapeHtml(g.name)}</button>`).join('')}</div>`;
+  }
+
+  // ---------- hero ----------
+  function renderHero(){
+    const group = getGroup(state.evalGroupId);
+    const heroSub = document.getElementById('heroSub');
+    const heroGroupName = document.getElementById('heroGroupName');
+    const grid = document.getElementById('stampGrid');
+    if(!group){
+      heroSub.textContent = 'أضف حلقة من الإعدادات للبدء';
+      heroGroupName.textContent = '';
+      grid.innerHTML = '';
+      return;
+    }
+    heroGroupName.textContent = 'حلقة: ' + group.name;
+    const day = Math.min(group.currentDay, 16);
+    const monthDone = group.currentDay > 16;
+    heroSub.textContent = monthDone
+      ? 'اكتمل الشهر (١٦ يومًا) — احفظه وابدأ شهرًا جديدًا من الإعدادات'
+      : `الأسبوع ${weekOf(day)} · اليوم ${dayInWeekOf(day)} من ٤  (اليوم ${day} من ١٦ إجمالًا)`;
+
+    grid.innerHTML = '';
+    for(let w=1; w<=4; w++){
+      const weekEl = document.createElement('div');
+      weekEl.className = 'stamp-week';
+      const label = document.createElement('div');
+      label.className = 'stamp-week-label';
+      label.textContent = 'أسبوع ' + w;
+      const days = document.createElement('div');
+      days.className = 'stamp-days';
+      for(let d=1; d<=4; d++){
+        const dayIndex = (w-1)*4 + d;
+        const sq = document.createElement('div');
+        sq.className = 'stamp';
+        if(dayIndex < group.currentDay) sq.classList.add('done');
+        if(dayIndex === group.currentDay && !monthDone) sq.classList.add('current');
+        if(dayIndex === selectedDay) sq.classList.add('selected');
+        if(dayIndex <= maxReachableDay(group)){
+          sq.style.cursor = 'pointer';
+          sq.title = dayLabel(dayIndex);
+          sq.addEventListener('click', ()=>{ selectedDay = dayIndex; setTab('eval'); renderEval(); });
+        }
+        days.appendChild(sq);
+      }
+      weekEl.appendChild(label);
+      weekEl.appendChild(days);
+      grid.appendChild(weekEl);
+    }
+  }
+
+  // ---------- eval tab ----------
+  function renderEval(){
+    const root = document.getElementById('tabEval');
+
+    if(state.groups.length === 0){
+      root.innerHTML = `<div class="card"><p class="section-title">لا توجد حلقات بعد</p>
+        <p class="section-hint">أضف أول حلقة من تبويب «الإعدادات» لتبدأ التقييم.</p></div>`;
+      return;
+    }
+    if(!state.evalGroupId || !getGroup(state.evalGroupId)) state.evalGroupId = state.groups[0].id;
+    const group = getGroup(state.evalGroupId);
+
+    let html = `<div class="card">
+      <p class="section-title">اختر الحلقة</p>
+      <p class="section-hint">كل حلقة لها أسماؤها وبنودها الخاصة.</p>
+      ${groupPickerHtml(state.evalGroupId)}
+    </div>`;
+
+    if(group.students.length === 0){
+      html += `<div class="card"><p class="section-title">لا يوجد أسماء في هذه الحلقة</p>
+        <p class="section-hint">أضف المشاركين لهذه الحلقة من تبويب «الإعدادات».</p></div>`;
+      root.innerHTML = html;
+      bindGroupPicker(root, id=>{ state.evalGroupId = id; activeStudentId = null; selectedDay = null; saveState(); renderAll(); });
+      return;
+    }
+
+    if(!activeStudentId || !group.students.find(s=>s.id===activeStudentId)) activeStudentId = group.students[0].id;
+    if(!selectedDay || selectedDay > maxReachableDay(group)) selectedDay = maxReachableDay(group);
+
+    const idx = group.students.findIndex(s=>s.id===activeStudentId);
+    const student = group.students[idx];
+    const staging = isStagingDay(group, selectedDay);
+    const staged = getDayList(group, selectedDay, student.id);
+    const markedCount = group.students.filter(s => getDayList(group, selectedDay, s.id).length > 0).length;
+
+    let dayChipsHtml = '';
+    for(let d=1; d<=16; d++){
+      const reachable = d <= maxReachableDay(group);
+      const isCur = d === group.currentDay && group.currentDay<=16;
+      const cls = ['day-chip'];
+      if(!reachable) cls.push('disabled');
+      if(isCur) cls.push('current');
+      if(d===selectedDay) cls.push('selected');
+      dayChipsHtml += `<button type="button" class="${cls.join(' ')}" data-day="${d}" ${reachable?'':'disabled'} title="${dayLabel(d)}">${d}</button>`;
+    }
+
+    let rosterHtml = group.students.map(s => {
+      const has = getDayList(group, selectedDay, s.id).length > 0;
+      return `<button class="pill ${s.id===activeStudentId?'active':''} ${has?'marked':'' }" data-student="${s.id}">
+        <span class="pill-dot"></span>${escapeHtml(s.name)}
+      </button>`;
+    }).join('');
+
+    let itemsHtml = group.items.length ? group.items.map(it => {
+      const on = staged.includes(it.id);
+      const neg = it.points < 0;
+      return `<div class="item-row ${on?'on':''} ${neg?'negative':''}" data-item="${it.id}">
+        <div class="check-circle">${on?'✓':''}</div>
+        <div style="flex:1; padding:0 12px;"><div class="item-name">${escapeHtml(it.name)}${neg?'<span class="type-tag neg">خصم</span>':''}</div></div>
+        <div class="item-points">${it.points>0?'+':''}${it.points} نقطة</div>
+      </div>`;
+    }).join('') : `<p class="empty-state">لا توجد بنود بعد لهذه الحلقة — أضفها من الإعدادات.</p>`;
+
+    html += `
+      <div class="card">
+        <p class="section-title">التنقل بين الأيام</p>
+        <p class="section-hint">اضغط على أي يوم سابق لمراجعته أو لتعديل ما فاتك تسجيله فيه. التعديلات على الأيام السابقة تُحفظ فور الضغط مباشرة.</p>
+        <div class="day-row">${dayChipsHtml}</div>
+      </div>
+
+      <div class="card">
+        <p class="section-title">قائمة المشاركين</p>
+        <p class="section-hint">اضغط على أي اسم لفتح تقييمه. يمكنك الرجوع لأي اسم سابق والتعديل عليه في أي وقت.</p>
+        <div class="roster-grid">${rosterHtml}</div>
+      </div>
+
+      <div class="card">
+        <div class="detail-head">
+          <div>
+            <div class="detail-name">${escapeHtml(student.name)}</div>
+            <div style="font-size:12.5px; color:var(--text-dim); margin-top:3px;">${dayLabel(selectedDay)}</div>
+          </div>
+          <div class="nav-mini">
+            <span>${idx+1} من ${group.students.length}</span>
+            <button class="icon-btn" id="prevBtn" ${idx===0?'disabled':''}>‹</button>
+            <button class="icon-btn" id="nextBtn" ${idx===group.students.length-1?'disabled':''}>›</button>
+          </div>
+        </div>
+        <div id="itemsList">${itemsHtml}</div>
+
+        ${staging ? `
+        <div class="submit-bar">
+          <span class="submit-note">تم تقييم ${markedCount} من ${group.students.length} اليوم</span>
+          <button class="btn btn-mint" id="submitDayBtn">إرسال جماعي — احتساب نقاط اليوم</button>
+        </div>` : `
+        <div class="submit-bar">
+          <span class="submit-note">وضع تعديل يوم سابق — كل تغيير يُحفظ تلقائيًا فورًا، ويُحدَّث الترتيب مباشرة</span>
+          <button class="btn btn-ghost" id="backTodayBtn">${group.currentDay>16?'العودة لآخر يوم':'العودة لليوم الحالي'}</button>
+        </div>`}
+        <p class="status-line" id="evalStatus"></p>
+      </div>
+    `;
+
+    root.innerHTML = html;
+
+    bindGroupPicker(root, id=>{ state.evalGroupId = id; activeStudentId = null; selectedDay = null; saveState(); renderAll(); });
+
+    root.querySelectorAll('[data-day]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const d = Number(btn.getAttribute('data-day'));
+        if(d > maxReachableDay(group)) return;
+        selectedDay = d;
+        renderEval();
+      });
+    });
+    root.querySelectorAll('[data-student]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ activeStudentId = btn.getAttribute('data-student'); renderEval(); });
+    });
+    root.querySelectorAll('[data-item]').forEach(row=>{
+      row.addEventListener('click', ()=>{
+        const itemId = row.getAttribute('data-item');
+        const list = getDayList(group, selectedDay, student.id).slice();
+        const pos = list.indexOf(itemId);
+        if(pos === -1) list.push(itemId); else list.splice(pos,1);
+        setDayList(group, selectedDay, student.id, list);
+        saveState();
+        renderEval();
+        if(!staging) renderResults();
+      });
+    });
+    const prevBtn = document.getElementById('prevBtn');
+    const nextBtn = document.getElementById('nextBtn');
+    if(prevBtn) prevBtn.addEventListener('click', ()=>{ activeStudentId = group.students[idx-1].id; renderEval(); });
+    if(nextBtn) nextBtn.addEventListener('click', ()=>{ activeStudentId = group.students[idx+1].id; renderEval(); });
+
+    const submitBtn = document.getElementById('submitDayBtn');
+    if(submitBtn) submitBtn.addEventListener('click', ()=> submitDay(group));
+    const backBtn = document.getElementById('backTodayBtn');
+    if(backBtn) backBtn.addEventListener('click', ()=>{ selectedDay = maxReachableDay(group); renderEval(); });
+  }
+
+  function bindGroupPicker(root, onSelect){
+    root.querySelectorAll('[data-group]').forEach(btn=>{
+      btn.addEventListener('click', ()=> onSelect(btn.getAttribute('data-group')));
+    });
+  }
+
+  async function submitDay(group){
+    if(group.currentDay > 16) return;
+    const unmarked = group.students.length - group.students.filter(s => (group.todayEntries[s.id]||[]).length>0).length;
+    let msg = `سيتم احتساب نقاط اليوم ${group.currentDay} لجميع مشاركي حلقة "${group.name}".`;
+    if(unmarked>0) msg += `\n(${unmarked} لم يُسجَّل لهم أي بند وسيُحتسب لهم صفر اليوم)`;
+    if(!confirm(msg + '\n\nهل تريد المتابعة؟')) return;
+
+    group.students.forEach(s=>{
+      if(!group.records[s.id]) group.records[s.id] = {};
+      group.records[s.id][group.currentDay] = group.todayEntries[s.id] || [];
+    });
+    group.todayEntries = {};
+    group.currentDay += 1;
+    selectedDay = maxReachableDay(group);
+    await saveState();
+    renderAll();
+    const statusEl = document.getElementById('evalStatus');
+    if(statusEl) statusEl.textContent = 'تم احتساب النقاط بنجاح ✓';
+  }
+
+  // ---------- results tab ----------
+  function renderResults(){
+    const root = document.getElementById('tabResults');
+    if(state.groups.length === 0){
+      root.innerHTML = `<div class="card"><p class="empty-state">لا توجد حلقات بعد.</p></div>`;
+      return;
+    }
+    if(!state.resultsGroupId || !getGroup(state.resultsGroupId)) state.resultsGroupId = state.groups[0].id;
+    const group = getGroup(state.resultsGroupId);
+
+    let picker = `<div class="card">
+      <p class="section-title">اختر الحلقة</p>
+      ${groupPickerHtml(state.resultsGroupId)}
+    </div>`;
+
+    if(group.students.length === 0){
+      root.innerHTML = picker + `<div class="card"><p class="empty-state">لا يوجد مشاركون في هذه الحلقة بعد.</p></div>`;
+      bindGroupPicker(root, id=>{ state.resultsGroupId = id; expandedStudentId = null; saveState(); renderResults(); });
+      return;
+    }
+
+    const ranked = group.students
+      .map(s => ({ id:s.id, name:s.name, total: studentTotal(group, s.id) }))
+      .sort((a,b)=> b.total - a.total);
+    const max = Math.max(1, ranked[0].total);
+
+    const rows = ranked.map((r,i)=>{
+      const cls = i===0?'r1':i===1?'r2':i===2?'r3':'';
+      const pct = Math.max(0, Math.min(100, Math.round((r.total/max)*100)));
+      const expanded = expandedStudentId === r.id;
+      return `<div>
+        <div class="rank-row ${cls}" data-toggle="${r.id}" style="cursor:pointer;">
+          <div class="rank-num">${i===0?trophyIcon():(i+1)}</div>
+          <div class="rank-body">
+            <div class="rank-name">${escapeHtml(r.name)}</div>
+            <div class="rank-bar-bg"><div class="rank-bar-fill" style="width:${r.total>0?pct:0}%"></div></div>
+          </div>
+          <div class="rank-points">${r.total}<br><small>نقطة</small></div>
+          <span class="expand-arrow ${expanded?'open':''}">▾</span>
+        </div>
+        ${expanded ? renderBreakdownHtml(group, r.id) : ''}
+      </div>`;
+    }).join('');
+
+    root.innerHTML = picker + `<div class="card">
+      <p class="section-title">ترتيب الشهر الحالي — ${escapeHtml(group.name)}</p>
+      <p class="section-hint">يُحدَّث تلقائيًا من الأعلى إلى الأقل بعد كل إرسال جماعي. اضغط على أي مشارك لعرض إحصائية إنجازه في كل بند.</p>
+      ${rows}
+    </div>`;
+
+    bindGroupPicker(root, id=>{ state.resultsGroupId = id; expandedStudentId = null; saveState(); renderResults(); });
+    root.querySelectorAll('[data-toggle]').forEach(row=>{
+      row.addEventListener('click', ()=>{
+        const id = row.getAttribute('data-toggle');
+        expandedStudentId = (expandedStudentId === id) ? null : id;
+        renderResults();
+      });
+    });
+  }
+
+  function renderBreakdownHtml(group, studentId){
+    if(group.items.length === 0){
+      return `<div class="breakdown-wrap"><p class="empty-state">لا توجد بنود لعرضها.</p></div>`;
+    }
+    const { totalDays, counts } = studentItemBreakdown(group, studentId);
+    const rows = group.items.map(it=>{
+      const c = counts[it.id] || 0;
+      const pct = totalDays > 0 ? Math.round((c/totalDays)*100) : 0;
+      const pts = c * it.points;
+      const neg = it.points < 0;
+      return `<div class="breakdown-row">
+        <div class="breakdown-name">${escapeHtml(it.name)}${neg?'<span class="type-tag neg">خصم</span>':''}</div>
+        <div class="breakdown-bar-bg"><div class="breakdown-bar-fill ${neg?'neg':''}" style="width:${pct}%"></div></div>
+        <div class="breakdown-meta">${c} من ${totalDays} يوم · ${pct}%</div>
+        <div class="breakdown-pts ${pts<0?'neg':''}">${pts>0?'+':''}${pts}</div>
+      </div>`;
+    }).join('');
+    return `<div class="breakdown-wrap">
+      <p class="section-hint" style="margin:0 0 10px;">${totalDays>0 ? `بناءً على ${totalDays} يومًا مسجّلًا لهذا المشارك (بعد آخر تصفير إن وُجد).` : 'لا توجد أيام مسجّلة بعد لهذا المشارك.'}</p>
+      ${rows}
+    </div>`;
+  }
+
+  // ---------- archive & comparison tab ----------
+  function renderArchive(){
+    const root = document.getElementById('tabArchive');
+    if(state.groups.length === 0){
+      root.innerHTML = `<div class="card"><p class="empty-state">لا توجد حلقات بعد.</p></div>`;
+      return;
+    }
+    if(!state.archiveGroupId || !getGroup(state.archiveGroupId)) state.archiveGroupId = state.groups[0].id;
+    const group = getGroup(state.archiveGroupId);
+
+    let picker = `<div class="card">
+      <p class="section-title">اختر الحلقة</p>
+      ${groupPickerHtml(state.archiveGroupId)}
+    </div>`;
+
+    const allIds = new Map();
+    group.archives.forEach(m => m.students.forEach(s => allIds.set(s.id, s.name)));
+    group.students.forEach(s => allIds.set(s.id, s.name));
+
+    let compareBlock;
+    if(allIds.size === 0){
+      compareBlock = `<p class="empty-state">أضف مشاركين وسجّل بيانات لعرض المقارنة.</p>`;
+    }else{
+      if(!compareStudentId || !allIds.has(compareStudentId)) compareStudentId = allIds.keys().next().value;
+      const options = Array.from(allIds.entries()).map(([id,name])=>`<option value="${id}" ${id===compareStudentId?'selected':''}>${escapeHtml(name)}</option>`).join('');
+      compareBlock = `
+        <select class="field field-name" id="compareStudentSelect" style="width:100%; max-width:280px;">${options}</select>
+        ${renderComparisonTable(group, compareStudentId)}
+      `;
+    }
+
+    let archivesHtml;
+    if(group.archives.length === 0){
+      archivesHtml = `<p class="empty-state">لا توجد أشهر مؤرشفة بعد لهذه الحلقة. عند الضغط على «بدء شهر جديد» من الإعدادات سيُحفظ الشهر الحالي هنا تلقائيًا باسمه وتاريخ انتهائه.</p>`;
+    }else{
+      archivesHtml = group.archives.slice().reverse().map(m=>{
+        const dateStr = m.endDate ? new Date(m.endDate).toLocaleDateString('ar', {year:'numeric', month:'long', day:'numeric'}) : '';
+        const ranked = m.students.slice().sort((a,b)=>b.total-a.total);
+        const top = ranked[0];
+        const rows = ranked.map((s,i)=>`<div class="rank-row ${i===0?'r1':i===1?'r2':i===2?'r3':''}">
+            <div class="rank-num">${i===0?trophyIcon():(i+1)}</div>
+            <div class="rank-body"><div class="rank-name">${escapeHtml(s.name)}</div></div>
+            <div class="rank-points">${s.total}<br><small>نقطة</small></div>
+          </div>`).join('');
+        return `<div class="card archive-card">
+          <div class="detail-head">
+            <div>
+              <div class="detail-name">${escapeHtml(m.label)}</div>
+              <div style="font-size:12px;color:var(--text-dim); margin-top:3px;">انتهى في ${dateStr}${top?` · الأول: ${escapeHtml(top.name)}`:''}</div>
+            </div>
+          </div>
+          ${rows || '<p class="empty-state">لا يوجد مشاركون في هذا الأرشيف.</p>'}
+        </div>`;
+      }).join('');
+    }
+
+    root.innerHTML = picker + `
+      <div class="card">
+        <p class="section-title">مقارنة أداء مشارك عبر الأشهر</p>
+        <p class="section-hint">نسبة تحقيق كل بند لكل شهر مؤرشف، إضافة للشهر الحالي الجاري — لمتابعة تحسّن أو تراجع الأداء بمرور الوقت.</p>
+        ${compareBlock}
+      </div>
+      <p class="editing-header">الأشهر المؤرشفة لحلقة ${escapeHtml(group.name)}</p>
+      ${archivesHtml}
+    `;
+
+    bindGroupPicker(root, id=>{ state.archiveGroupId = id; compareStudentId = null; saveState(); renderArchive(); });
+    const sel = document.getElementById('compareStudentSelect');
+    if(sel) sel.addEventListener('change', ()=>{ compareStudentId = sel.value; renderArchive(); });
+  }
+
+  function renderComparisonTable(group, studentId){
+    const months = [...group.archives, currentMonthSnapshot(group)];
+    const relevant = months.filter(m => m.students.some(s=>s.id===studentId));
+    if(relevant.length === 0) return `<p class="empty-state">لا توجد بيانات لهذا المشارك بعد.</p>`;
+
+    const itemNames = [];
+    relevant.forEach(m => m.items.forEach(it=>{ if(!itemNames.includes(it.name)) itemNames.push(it.name); }));
+    if(itemNames.length === 0) return `<p class="empty-state">لا توجد بنود مسجّلة لهذا المشارك بعد.</p>`;
+
+    const theadCols = relevant.map(m=>`<th>${escapeHtml(m.label)}</th>`).join('');
+    const bodyRows = itemNames.map(name=>{
+      const cells = relevant.map(m=>{
+        const itm = m.items.find(it=>it.name===name);
+        const stu = m.students.find(s=>s.id===studentId);
+        if(!itm || !stu || !stu.totalDays) return `<td class="cmp-cell">—</td>`;
+        const c = stu.counts[itm.id] || 0;
+        const pct = Math.round((c/stu.totalDays)*100);
+        const neg = itm.points < 0;
+        return `<td class="cmp-cell"><span class="cmp-pct ${neg?'neg':''}">${pct}%</span></td>`;
+      }).join('');
+      return `<tr><td class="cmp-item-name">${escapeHtml(name)}</td>${cells}</tr>`;
+    }).join('');
+    const totalsRow = `<tr class="cmp-totals-row"><td class="cmp-item-name">الإجمالي (نقطة)</td>${relevant.map(m=>{
+        const stu = m.students.find(s=>s.id===studentId);
+        return `<td class="cmp-cell">${stu?stu.total:0}</td>`;
+    }).join('')}</tr>`;
+
+    return `<div class="cmp-table-wrap"><table class="cmp-table">
+      <thead><tr><th></th>${theadCols}</tr></thead>
+      <tbody>${bodyRows}${totalsRow}</tbody>
+    </table></div>`;
+  }
+
+  // ---------- settings tab ----------
+  function renderSettings(){
+    const root = document.getElementById('tabSettings');
+
+    const groupRows = state.groups.map(g => `
+      <div class="list-row">
+        <input class="field field-name" data-group-name="${g.id}" value="${escapeAttr(g.name)}">
+        <button class="btn ${g.id===state.settingsGroupId?'btn-primary':'btn-ghost'} btn-sm" data-edit-group="${g.id}">${g.id===state.settingsGroupId?'قيد التحرير':'تحرير'}</button>
+        <button class="btn btn-danger btn-sm" data-remove-group="${g.id}">حذف</button>
+      </div>`).join('') || `<p class="empty-state">لا توجد حلقات.</p>`;
+
+    const syncHtml = `
+      <div class="card">
+        <p class="section-title">المزامنة بين الأجهزة</p>
+        <p class="section-hint">المزامنة الفورية مفعّلة تلقائيًا على هذا الملف — يعمل على أي جهاز تفتح فيه هذا الملف دون أي إعداد أو رمز. كل تعديل يُحفظ فورًا ويظهر مباشرة على بقية الأجهزة.</p>
+        <details class="sync-help">
+          <summary>لماذا تظهر «تعذّر الاتصال بالمزامنة»؟</summary>
+          <p class="section-hint" style="margin-top:8px;">
+            هذا يحدث إذا لم يُجهَّز الجدول بعد في مشروع Supabase. افتح SQL Editor في مشروعك وشغّل الكود التالي مرة واحدة فقط:
+          </p>
+          <div class="sql-box">create table if not exists ${SYNC_TABLE} (
+  sync_id text primary key,
+  data jsonb not null,
+  updated_at timestamptz not null default now()
+);
+
+alter table ${SYNC_TABLE} enable row level security;
+
+create policy "allow all access"
+  on ${SYNC_TABLE} for all
+  using (true) with check (true);
+
+alter publication supabase_realtime add table ${SYNC_TABLE};</div>
+          <p class="section-hint">تنبيه: سياسة "allow all access" تجعل أي شخص يملك رابط ومفتاح هذا المشروع قادرًا على قراءة/تعديل هذا الجدول.</p>
+        </details>
+      </div>`;
+
+    let html = syncHtml + `
+      <div class="card">
+        <p class="section-title">الحلقات</p>
+        <p class="section-hint">كل حلقة مستقلة تمامًا: أسماؤها، بنودها، وشهرها الخاص. اضغط «تحرير» على أي حلقة لتعديل تفاصيلها بالأسفل.</p>
+        ${groupRows}
+        <div class="add-form">
+          <input class="field field-name" id="newGroupName" placeholder="اسم الحلقة الجديدة">
+          <button class="btn btn-primary btn-sm" id="addGroupBtn">إضافة حلقة</button>
+        </div>
+      </div>
+    `;
+
+    html += `
+      <div class="card" style="border-color:var(--danger);">
+        <p class="section-title" style="color:var(--danger);">منطقة الخطر</p>
+        <p class="section-hint">حذف كل شيء نهائيًا: كل الحلقات، الأسماء، البنود، السجلات اليومية، وكل أرشيف الأشهر السابقة — للبدء بالتطبيق من الصفر تمامًا. هذا الإجراء لا يمكن التراجع عنه.</p>
+        <button class="btn btn-danger" id="factoryResetBtn">حذف جميع البيانات والبدء من جديد</button>
+      </div>
+    `;
+
+    if(!state.settingsGroupId || !getGroup(state.settingsGroupId)) state.settingsGroupId = state.groups[0] ? state.groups[0].id : null;
+    const group = state.settingsGroupId ? getGroup(state.settingsGroupId) : null;
+
+    if(group){
+      const itemRows = group.items.map(it => `
+        <div class="list-row">
+          <input class="field field-name" data-item-name="${it.id}" value="${escapeAttr(it.name)}">
+          <span class="type-tag ${it.points<0?'neg':'pos'}">${it.points<0?'خصم':'مكسب'}</span>
+          <input class="field field-points" type="number" data-item-points="${it.id}" value="${it.points}">
+          <button class="btn btn-danger btn-sm" data-remove-item="${it.id}">حذف</button>
+        </div>`).join('') || `<p class="empty-state">لا توجد بنود.</p>`;
+
+      const studentRows = group.students.map(s => {
+        const hasReset = (group.resetAt[s.id]||0) > 0;
+        return `<div class="list-row">
+          <input class="field field-name" data-student-name="${s.id}" value="${escapeAttr(s.name)}">
+          <span style="font-size:12px;color:var(--text-dim); min-width:60px;">${hasReset?'صُفِّر مؤخرًا':''}</span>
+          <button class="btn btn-ghost btn-sm" data-reset-student="${s.id}">تصفير</button>
+          <button class="btn btn-danger btn-sm" data-remove-student="${s.id}">حذف</button>
+        </div>`;
+      }).join('') || `<p class="empty-state">لا يوجد مشاركون.</p>`;
+
+      html += `
+        <p class="editing-header">تحرير حلقة: ${escapeHtml(group.name)}</p>
+
+        <div class="card">
+          <p class="section-title">البنود اليومية</p>
+          <p class="section-hint">نفس البنود تُستخدم كل يوم طوال الشهر. بند "مكسب" يضيف نقاطًا عند تنفيذه، وبند "خصم" ينقص نقاطًا عند وقوع سلوك غير مرغوب — كلاهما يظهر فورًا في شاشة التقييم دون أي تعديل آخر.</p>
+          ${itemRows}
+          <div class="add-form">
+            <input class="field field-name" id="newItemName" placeholder="اسم البند الجديد">
+            <div class="seg" id="newItemTypeSeg">
+              <button type="button" class="on" data-type="pos">مكسب +</button>
+              <button type="button" data-type="neg">خصم −</button>
+            </div>
+            <input class="field field-points" id="newItemPoints" type="number" min="0" value="5" placeholder="النقاط">
+            <button class="btn btn-primary btn-sm" id="addItemBtn">إضافة بند</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <p class="section-title">المشاركون</p>
+          <p class="section-hint">إضافة اسم جديد تظهر فورًا في قائمة التقييم والنتائج لهذه الحلقة فقط.</p>
+          ${studentRows}
+          <div class="add-form">
+            <input class="field field-name" id="newStudentName" placeholder="اسم المشارك الجديد">
+            <button class="btn btn-primary btn-sm" id="addStudentBtn">إضافة اسم</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <p class="section-title">إعادة الضبط والأرشفة</p>
+          <p class="section-hint">تصفير الكل يُعيد نقاط جميع المشاركين للصفر ويبدأ الاحتساب من جديد اعتبارًا من اليوم الحالي — دون حذف السجل السابق. «بدء شهر جديد» يحفظ نتائج الشهر الحالي في الأرشيف باسمه وتاريخ انتهائه، ثم يُفرّغ السجلات اليومية للبدء من جديد.</p>
+          <div class="settings-foot">
+            <button class="btn btn-danger" id="resetAllBtn">تصفير جميع المشاركين</button>
+            <button class="btn btn-mint" id="newMonthBtn">حفظ الشهر وبدء شهر جديد</button>
+          </div>
+        </div>
+      `;
+    }
+
+    html += `<p class="status-line" id="settingsStatus"></p>`;
+    root.innerHTML = html;
+
+    // group management
+    root.querySelectorAll('[data-group-name]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const g = getGroup(inp.getAttribute('data-group-name'));
+        if(g){ g.name = inp.value.trim() || g.name; saveState(); renderAll(); }
+      });
+    });
+    root.querySelectorAll('[data-edit-group]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{ state.settingsGroupId = btn.getAttribute('data-edit-group'); saveState(); renderSettings(); });
+    });
+    root.querySelectorAll('[data-remove-group]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const id = btn.getAttribute('data-remove-group');
+        const g = getGroup(id);
+        if(!confirm(`حذف حلقة "${g?g.name:''}" نهائيًا مع كل أسمائها وبنودها وسجلاتها وأرشيفها؟`)) return;
+        state.groups = state.groups.filter(x=>x.id!==id);
+        if(state.groups.length===0) state.groups.push(newGroup('الحلقة الأولى'));
+        const fallback = state.groups[0].id;
+        if(state.evalGroupId===id){ state.evalGroupId=fallback; activeStudentId=null; selectedDay=null; }
+        if(state.resultsGroupId===id){ state.resultsGroupId=fallback; expandedStudentId=null; }
+        if(state.archiveGroupId===id){ state.archiveGroupId=fallback; compareStudentId=null; }
+        if(state.settingsGroupId===id) state.settingsGroupId=fallback;
+        saveState(); renderAll();
+      });
+    });
+    document.getElementById('addGroupBtn').addEventListener('click', ()=>{
+      const nameEl = document.getElementById('newGroupName');
+      const name = nameEl.value.trim();
+      if(!name) return;
+      const g = newGroup(name);
+      state.groups.push(g);
+      state.settingsGroupId = g.id;
+      nameEl.value='';
+      saveState(); renderAll();
+      flashStatus('settingsStatus', 'تمت إضافة الحلقة ✓');
+    });
+    document.getElementById('factoryResetBtn').addEventListener('click', ()=>{
+      const check = prompt('هذا سيحذف كل شيء نهائيًا: كل الحلقات وأسماءها وبنودها وسجلاتها وأرشيف كل الأشهر — ولا يمكن التراجع عنه إطلاقًا.\n\nللتأكيد، اكتب كلمة "حذف" بالضبط ثم اضغط موافق:');
+      if(check === null) return;
+      if(check.trim() !== 'حذف'){ flashStatus('settingsStatus', 'لم يتم الحذف — الكلمة المكتوبة غير مطابقة.'); return; }
+      state = defaultState();
+      activeStudentId = null; selectedDay = null; expandedStudentId = null; compareStudentId = null;
+      saveState(); renderAll();
+      flashStatus('settingsStatus', 'تم حذف جميع البيانات والبدء من جديد ✓');
+    });
+
+    if(!group) return;
+
+    // item edits
+    root.querySelectorAll('[data-item-name]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const it = group.items.find(x=>x.id===inp.getAttribute('data-item-name'));
+        if(it){ it.name = inp.value.trim() || it.name; saveState(); renderResults(); }
+      });
+    });
+    root.querySelectorAll('[data-item-points]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const it = group.items.find(x=>x.id===inp.getAttribute('data-item-points'));
+        if(it){ it.points = Number(inp.value)||0; saveState(); renderAll(); }
+      });
+    });
+    root.querySelectorAll('[data-remove-item]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        if(!confirm('حذف هذا البند؟ سيبقى تأثيره على أيام سابقة قد سُجِّل فيها.')) return;
+        group.items = group.items.filter(x=>x.id!==btn.getAttribute('data-remove-item'));
+        saveState(); renderAll();
+      });
+    });
+    let newItemType = 'pos';
+    const segBtns = root.querySelectorAll('#newItemTypeSeg button');
+    segBtns.forEach(b=>{
+      b.addEventListener('click', ()=>{
+        newItemType = b.getAttribute('data-type');
+        segBtns.forEach(x=>x.classList.remove('on','neg'));
+        b.classList.add('on'); if(newItemType==='neg') b.classList.add('neg');
+      });
+    });
+    document.getElementById('addItemBtn').addEventListener('click', ()=>{
+      const nameEl = document.getElementById('newItemName');
+      const ptsEl = document.getElementById('newItemPoints');
+      const name = nameEl.value.trim();
+      const magnitude = Math.abs(Number(ptsEl.value)||0);
+      if(!name || magnitude===0) return;
+      const points = newItemType === 'neg' ? -magnitude : magnitude;
+      group.items.push({ id: uid(), name, points });
+      nameEl.value=''; ptsEl.value=5;
+      newItemType='pos'; segBtns.forEach(x=>x.classList.remove('on','neg')); segBtns[0].classList.add('on');
+      saveState(); renderAll();
+      flashStatus('settingsStatus', 'تمت إضافة البند ✓');
+    });
+
+    // student edits
+    root.querySelectorAll('[data-student-name]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const s = group.students.find(x=>x.id===inp.getAttribute('data-student-name'));
+        if(s){ s.name = inp.value.trim() || s.name; saveState(); renderResults(); renderEval(); }
+      });
+    });
+    root.querySelectorAll('[data-remove-student]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        if(!confirm('حذف هذا المشارك نهائيًا مع كل سجله؟')) return;
+        const id = btn.getAttribute('data-remove-student');
+        group.students = group.students.filter(x=>x.id!==id);
+        delete group.records[id]; delete group.resetAt[id]; delete group.todayEntries[id];
+        if(expandedStudentId === id) expandedStudentId = null;
+        saveState(); renderAll();
+      });
+    });
+    root.querySelectorAll('[data-reset-student]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const id = btn.getAttribute('data-reset-student');
+        const s = group.students.find(x=>x.id===id);
+        if(!confirm(`تصفير نقاط "${s.name}"؟ سيبدأ احتسابه من جديد اعتبارًا من اليوم الحالي.`)) return;
+        group.resetAt[id] = group.currentDay - 1;
+        saveState(); renderAll();
+        flashStatus('settingsStatus', `تم تصفير ${s.name} ✓`);
+      });
+    });
+    document.getElementById('addStudentBtn').addEventListener('click', ()=>{
+      const nameEl = document.getElementById('newStudentName');
+      const name = nameEl.value.trim();
+      if(!name) return;
+      group.students.push({ id: uid(), name });
+      nameEl.value='';
+      saveState(); renderAll();
+      flashStatus('settingsStatus', 'تمت إضافة المشارك ✓');
+    });
+
+    document.getElementById('resetAllBtn').addEventListener('click', ()=>{
+      if(!confirm(`تصفير نقاط جميع مشاركي حلقة "${group.name}"؟ سيبدأ الجميع من جديد اعتبارًا من اليوم الحالي.`)) return;
+      group.students.forEach(s=>{ group.resetAt[s.id] = group.currentDay - 1; });
+      saveState(); renderAll();
+      flashStatus('settingsStatus', 'تم تصفير جميع المشاركين ✓');
+    });
+    document.getElementById('newMonthBtn').addEventListener('click', ()=>{
+      const defaultLabel = new Date().toLocaleDateString('ar', {month:'long', year:'numeric'});
+      const label = prompt(`اسم هذا الشهر لحلقة "${group.name}" (سيُحفظ في الأرشيف قبل البدء من جديد):`, defaultLabel);
+      if(label === null) return;
+      const finalLabel = label.trim() || defaultLabel;
+      if(!confirm('سيتم حفظ نتائج هذا الشهر في أرشيف هذه الحلقة، ثم تفريغ سجلات الأيام الحالية للبدء من جديد. هذا لا يمكن التراجع عنه. متابعة؟')) return;
+      archiveGroupMonth(group, finalLabel);
+      group.records = {}; group.todayEntries = {}; group.resetAt = {}; group.currentDay = 1;
+      selectedDay = null;
+      saveState(); renderAll();
+      flashStatus('settingsStatus', `تم حفظ أرشيف "${finalLabel}" وبدء شهر جديد ✓`);
+    });
+  }
+
+  // ---------- storage availability ----------
+  function storageAvailable(){
+    try{
+      const k = '__storage_test__';
+      localStorage.setItem(k, '1');
+      localStorage.removeItem(k);
+      return true;
+    }catch(e){ return false; }
+  }
+
+  function showStorageWarning(){
+    const bar = document.createElement('div');
+    bar.className = 'warn-bar';
+    bar.textContent = 'تنبيه: متصفحك يمنع الحفظ المحلي في هذا الوضع (مثل التصفح الخفي)، لذا لن يتم حفظ أي تعديل بعد إغلاق الصفحة. افتح الملف في نافذة عادية (غير خفية) لحل المشكلة.';
+    document.getElementById('warnHost').appendChild(bar);
+  }
+
+  // ---------- tabs ----------
+  function setTab(tab){
+    currentTab = tab;
+    document.querySelectorAll('.tab-btn').forEach(b=> b.classList.toggle('active', b.getAttribute('data-tab')===tab));
+    document.getElementById('tabEval').style.display = tab==='eval' ? 'block':'none';
+    document.getElementById('tabResults').style.display = tab==='results' ? 'block':'none';
+    document.getElementById('tabArchive').style.display = tab==='archive' ? 'block':'none';
+    document.getElementById('tabSettings').style.display = tab==='settings' ? 'block':'none';
+  }
+
+  function renderAll(){
+    renderHero();
+    renderEval();
+    renderResults();
+    renderArchive();
+    renderSettings();
+  }
+
+  document.querySelectorAll('.tab-btn').forEach(btn=>{
+    btn.addEventListener('click', ()=> setTab(btn.getAttribute('data-tab')));
+  });
+
+  document.getElementById('syncGotoSettings').addEventListener('click', ()=> setTab('settings'));
+
+  (async function init(){
+    if(!storageAvailable()) showStorageWarning();
+    await loadState();
+    setTab('eval');
+    renderAll();
+    connectSync();
+  })();
+
+})();
+</script>
+</body>
+</html>
