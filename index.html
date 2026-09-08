@@ -605,6 +605,25 @@
   let state = null;      // DATA ONLY — this is what gets synced to Supabase
   let uiState = null;    // NAVIGATION/UI ONLY — this device's screen, never synced
 
+  // Canonical (key-sorted) JSON stringify. Postgres's jsonb column does NOT
+  // preserve object key order (see Postgres docs: "jsonb ... does not
+  // preserve the order of object keys"). Plain JSON.stringify() comparisons
+  // between "what we just pushed" and "what came back from Supabase" were
+  // therefore unreliable — the round-tripped copy can have its keys in a
+  // different order even though nothing actually changed. That made the
+  // app think every one of its OWN writes was a change from elsewhere,
+  // triggering an endless merge → re-push → realtime-echo loop: fields
+  // (like a student's or group's name) would flicker/revert because they
+  // kept getting overwritten by the merge before the real edit ever
+  // "settled". Sorting keys before comparing makes the comparison ignore
+  // key order so only real content changes are detected.
+  function stableStringify(obj){
+    if(obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+    if(Array.isArray(obj)) return '[' + obj.map(stableStringify).join(',') + ']';
+    const keys = Object.keys(obj).sort();
+    return '{' + keys.map(k => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+  }
+
   // transient (not persisted at all) view state
   let activeStudentId = null;
   let selectedDay = null;
@@ -761,7 +780,7 @@
     if(!supabaseClient || !cfg) return false;
     try{
       const payload = { users: rbacStore.users };
-      rbacLastPushedJSON = JSON.stringify(payload);
+      rbacLastPushedJSON = stableStringify(payload);
       const { error } = await supabaseClient
         .from(RBAC_SYNC_TABLE)
         .upsert({ sync_id: cfg.syncId, data: payload, updated_at: new Date().toISOString() }, { onConflict: 'sync_id' });
@@ -808,7 +827,7 @@
       }, (payload) => {
         const incoming = payload.new && payload.new.data;
         if(!incoming || !Array.isArray(incoming.users)) return;
-        const incomingJSON = JSON.stringify(incoming);
+        const incomingJSON = stableStringify(incoming);
         if(incomingJSON === rbacLastPushedJSON) return; // our own write echoed back
         rbacApplyRemoteUsers(incoming.users);
       })
@@ -1589,8 +1608,7 @@
     const cfg = loadSyncConfig();
     if(!supabaseClient || !cfg) return false;
     try{
-      const snapshot = JSON.stringify(state);
-      lastPushedJSON = snapshot;
+      lastPushedJSON = stableStringify(state);
       const { error } = await supabaseClient
         .from(SYNC_TABLE)
         .upsert({ sync_id: cfg.syncId, data: state, updated_at: new Date().toISOString() }, { onConflict: 'sync_id' });
@@ -1634,7 +1652,7 @@
       }, (payload) => {
         const incoming = payload.new && payload.new.data;
         if(!incoming) return;
-        const incomingJSON = JSON.stringify(incoming);
+        const incomingJSON = stableStringify(incoming);
         if(incomingJSON === lastPushedJSON) return; // our own write echoed back
 
         // Merge instead of replace: keep anything this device already has
@@ -1661,7 +1679,7 @@
         // If merging pulled in anything the incoming payload didn't have
         // (our own recent local edit), push the merged superset back so
         // every other connected device converges on the same full picture.
-        if(JSON.stringify(state) !== incomingJSON) queueSyncPush();
+        if(stableStringify(state) !== incomingJSON) queueSyncPush();
       })
       .subscribe();
   }
@@ -1707,8 +1725,8 @@
         try{ localTs = parseInt(localStorage.getItem(LOCAL_TS_KEY) || '0', 10); }catch(e){ localTs = 0; }
 
         const merged = mergeState(state, data.data, localTs > remoteTs);
-        const mergedJSON = JSON.stringify(merged);
-        const remoteJSON = JSON.stringify(data.data);
+        const mergedJSON = stableStringify(merged);
+        const remoteJSON = stableStringify(data.data);
 
         isApplyingRemote = true;
         state = merged;
