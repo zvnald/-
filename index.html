@@ -1133,10 +1133,11 @@
 
   function defaultState(){
     const g = newGroup('الحلقة الأولى');
-    // NOTE: state only ever holds DATA (groups). Which group each tab is
+    // NOTE: state only ever holds DATA (groups, itemTemplates). Which group each tab is
     // currently showing lives in uiState instead, so it stays local per device.
     return {
-      groups: [g]
+      groups: [g],
+      itemTemplates: []
     };
   }
 
@@ -1216,13 +1217,14 @@
             resetAt: old.resetAt || {},
             archives: old.archives || []
           };
-          state = { groups:[g], evalGroupId:g.id, resultsGroupId:g.id, archiveGroupId:g.id, settingsGroupId:g.id };
+          state = { groups:[g], evalGroupId:g.id, resultsGroupId:g.id, archiveGroupId:g.id, settingsGroupId:g.id, itemTemplates:[] };
         }catch(e){ state = null; }
       }
     }
 
     if(!state) state = defaultState();
     if(!Array.isArray(state.groups)) state.groups = [];
+    if(!Array.isArray(state.itemTemplates)) state.itemTemplates = [];
     state.groups.forEach(ensureGroupShape);
     if(state.groups.length === 0) state.groups.push(newGroup('الحلقة الأولى'));
     // strip any legacy group-id pointers that might exist in old saved data —
@@ -1257,6 +1259,7 @@
     if(!s || !Array.isArray(s.groups)) return false;
     s.groups.forEach(ensureGroupShape);
     if(s.groups.length === 0) s.groups.push(newGroup('الحلقة الأولى'));
+    if(!Array.isArray(s.itemTemplates)) s.itemTemplates = [];
     delete s.evalGroupId; delete s.resultsGroupId; delete s.archiveGroupId; delete s.settingsGroupId;
     return true;
   }
@@ -2071,6 +2074,13 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
           <button class="btn btn-danger btn-sm" data-remove-item="${it.id}">حذف</button>
         </div>`).join('') || `<p class="empty-state">لا توجد بنود.</p>`;
 
+      const templateRows = state.itemTemplates.map(t => `
+        <div class="list-row">
+          <div class="field field-name" style="cursor:default;">${escapeHtml(t.name)} <span style="color:var(--text-dim); font-weight:400;">(${t.items.length} بند)</span></div>
+          <button class="btn btn-mint btn-sm" data-apply-template="${t.id}">استخدامه هنا</button>
+          <button class="btn btn-danger btn-sm" data-remove-template="${t.id}">حذف القالب</button>
+        </div>`).join('') || `<p class="empty-state">لا توجد قوالب محفوظة بعد.</p>`;
+
       const studentRows = group.students.map(s => {
         const hasReset = (group.resetAt[s.id]||0) > 0;
         return `<div class="list-row">
@@ -2096,6 +2106,14 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
             </div>
             <input class="field field-points" id="newItemPoints" type="number" min="0" value="5" placeholder="النقاط">
             <button class="btn btn-primary btn-sm" id="addItemBtn">إضافة بند</button>
+          </div>
+
+          <p class="editing-header" style="margin:22px 4px 8px; font-size:13px;">قوالب البنود المحفوظة</p>
+          <p class="section-hint">احفظ بنود هذه الحلقة كقالب، ثم طبّقه بضغطة زر واحدة على أي حلقة أخرى بدل إعادة كتابة نفس البنود يدويًا. تطبيق قالب على حلقة يستبدل بنودها الحالية بالكامل ببنود القالب — سجلات الأيام السابقة تبقى محفوظة كما هي.</p>
+          ${templateRows}
+          <div class="add-form">
+            <input class="field field-name" id="newTemplateName" placeholder="اسم القالب (مثال: بنود الحفظ)">
+            <button class="btn btn-ghost btn-sm" id="saveTemplateBtn">حفظ بنود هذه الحلقة كقالب</button>
           </div>
         </div>
 
@@ -2216,6 +2234,37 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
       newItemType='pos'; segBtns.forEach(x=>x.classList.remove('on','neg')); segBtns[0].classList.add('on');
       saveState(); renderAll();
       flashStatus('settingsStatus', 'تمت إضافة البند ✓');
+    });
+
+    document.getElementById('saveTemplateBtn').addEventListener('click', ()=>{
+      const nameEl = document.getElementById('newTemplateName');
+      if(!group.items.length){ flashStatus('settingsStatus', 'لا توجد بنود في هذه الحلقة لحفظها كقالب.'); return; }
+      const name = nameEl.value.trim() || `بنود ${group.name}`;
+      const tpl = { id: uid(), name, items: group.items.map(it => ({ name: it.name, points: it.points })) };
+      state.itemTemplates.push(tpl);
+      nameEl.value = '';
+      saveState(); renderSettings();
+      flashStatus('settingsStatus', `تم حفظ قالب "${tpl.name}" ✓`);
+    });
+    root.querySelectorAll('[data-apply-template]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const tpl = state.itemTemplates.find(t=>t.id===btn.getAttribute('data-apply-template'));
+        if(!tpl) return;
+        if(group.items.length && !confirm(`سيتم استبدال بنود حلقة "${group.name}" الحالية (${group.items.length} بند) ببنود قالب "${tpl.name}" (${tpl.items.length} بند). سجلات الأيام السابقة تبقى كما هي دون تأثير. متابعة؟`)) return;
+        group.items = tpl.items.map(it => ({ id: uid(), name: it.name, points: it.points }));
+        saveState(); renderAll();
+        flashStatus('settingsStatus', `تم تطبيق قالب "${tpl.name}" على حلقة "${group.name}" ✓`);
+      });
+    });
+    root.querySelectorAll('[data-remove-template]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const id = btn.getAttribute('data-remove-template');
+        const tpl = state.itemTemplates.find(t=>t.id===id);
+        if(!confirm(`حذف القالب "${tpl?tpl.name:''}"؟ هذا لا يؤثر على أي حلقة تستخدم هذه البنود حاليًا.`)) return;
+        state.itemTemplates = state.itemTemplates.filter(t=>t.id!==id);
+        saveState(); renderSettings();
+        flashStatus('settingsStatus', 'تم حذف القالب ✓');
+      });
     });
 
     // student edits
