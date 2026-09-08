@@ -234,6 +234,7 @@
   .rank-row.r3 .rank-num{ background:var(--bronze); color:var(--espresso); }
   .rank-body{ flex:1; min-width:0; }
   .rank-name{ font-weight:700; font-size:14.5px; margin-bottom:6px; }
+  .streak-badge{ display:inline-flex; align-items:center; gap:2px; font-size:12px; font-weight:800; color:#ff8a00; background:rgba(255,138,0,.12); border-radius:999px; padding:1px 8px; margin-inline-start:6px; vertical-align:middle; }
   .rank-bar-bg{ background:var(--panel-2); border-radius:999px; height:7px; overflow:hidden; }
   .rank-bar-fill{ height:100%; background: linear-gradient(90deg, var(--mint), var(--gold)); border-radius:999px; }
   .rank-points{ font-family:'Cairo',sans-serif; font-weight:800; font-size:15px; min-width:64px; text-align:left; }
@@ -594,6 +595,7 @@
   const STORAGE_KEY = 'points-program-state-v2';
   const OLD_STORAGE_KEY = 'points-program-state';
   const UI_STORAGE_KEY = 'points-program-ui-state-v1'; // local-only, never synced to Supabase
+  const LOCAL_TS_KEY = 'points-program-local-updated-v1'; // when THIS device last changed data locally (ms epoch)
   const SYNC_TABLE = 'points_app_state';
   const RBAC_SYNC_TABLE = 'points_app_rbac_users';
   // ---- Built-in Supabase connection: always on, no setup needed on any device ----
@@ -617,6 +619,8 @@
   let lastPushedJSON = null;   // used to ignore realtime echoes of our own writes
   let isApplyingRemote = false;
   let pushInFlight = false;    // true while a push request is on the wire
+  let pushRetryTimer = null;   // timer handle for auto-retry after a failed push
+  let pushRetryDelay = 3000;   // backs off up to a cap when retries keep failing
   let pushQueued = false;      // true if data changed again while a push was in flight
 
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
@@ -1127,7 +1131,19 @@
       todayEntries: {},
       records: {},
       resetAt: {},
-      archives: []
+      archives: [],
+      // Tombstones: students/items intentionally deleted from this group.
+      // Kept (id -> deletedAt ms) instead of just vanishing from the array,
+      // so that merging data from another device can tell "this was
+      // deliberately removed" apart from "this device just doesn't know
+      // about it yet" — see mergeGroup().
+      deletedStudentIds: {},
+      deletedItemIds: {},
+      // ---- Streak (real calendar days) config ----
+      // Which real-world weekdays count as "working days" for this group's streak.
+      // 0=الأحد, 1=الإثنين, 2=الثلاثاء, 3=الأربعاء, 4=الخميس, 5=الجمعة, 6=السبت
+      // Editable later from الإعدادات; defaults to Sun–Wed.
+      activeWorkingDays: [0, 1, 2, 3]
     };
   }
 
@@ -1137,7 +1153,9 @@
     // currently showing lives in uiState instead, so it stays local per device.
     return {
       groups: [g],
-      itemTemplates: []
+      itemTemplates: [],
+      // Tombstone: groups intentionally deleted (id -> deletedAt ms). See mergeGroup().
+      deletedGroupIds: {}
     };
   }
 
@@ -1188,7 +1206,118 @@
     if(!g.todayEntries) g.todayEntries = {};
     if(!g.resetAt) g.resetAt = {};
     if(!g.archives) g.archives = [];
+    if(!g.deletedStudentIds || typeof g.deletedStudentIds !== 'object') g.deletedStudentIds = {};
+    if(!g.deletedItemIds || typeof g.deletedItemIds !== 'object') g.deletedItemIds = {};
     if(!g.currentDay) g.currentDay = 1;
+    if(!Array.isArray(g.activeWorkingDays) || g.activeWorkingDays.length === 0){
+      g.activeWorkingDays = [0, 1, 2, 3];
+    }
+    g.students.forEach(ensureStudentStreakShape);
+  }
+
+  // ================= Streak (dynamic, real-calendar-day based) =================
+  // A student's streak state lives on the student object itself:
+  //   student.streak = { count: number, lastActiveDate: 'YYYY-MM-DD' | null }
+  // "lastActiveDate" is the last real calendar date (device-local) on which the
+  // student's points were increased. It is completely independent from the
+  // group's abstract 1..16 "currentDay" counter used for monthly point staging.
+  function ensureStudentStreakShape(s){
+    if(!s.streak || typeof s.streak !== 'object'){
+      s.streak = { count: 0, lastActiveDate: null };
+    } else {
+      if(typeof s.streak.count !== 'number') s.streak.count = 0;
+      if(typeof s.streak.lastActiveDate === 'undefined') s.streak.lastActiveDate = null;
+    }
+  }
+
+  function dateKey(d){
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,'0');
+    const day = String(d.getDate()).padStart(2,'0');
+    return `${y}-${m}-${day}`;
+  }
+
+  function todayDateOnly(){
+    const d = new Date();
+    d.setHours(0,0,0,0);
+    return d;
+  }
+
+  function isActiveWorkingDay(group, date){
+    const days = (Array.isArray(group.activeWorkingDays) && group.activeWorkingDays.length)
+      ? group.activeWorkingDays : [0,1,2,3];
+    return days.includes(date.getDay());
+  }
+
+  // Steps backward one real calendar day at a time (skipping holidays/non-working
+  // days only) until it lands on the most recent active working day BEFORE the
+  // given date. E.g. if today is Sunday and the working days are أحد-أربعاء, the
+  // "previous active day" resolves to last Wednesday.
+  function getPreviousActiveDay(group, fromDate){
+    const d = new Date(fromDate);
+    d.setHours(0,0,0,0);
+    // safety cap so a misconfigured (empty) activeWorkingDays can never loop forever
+    for(let guard = 0; guard < 366; guard++){
+      d.setDate(d.getDate() - 1);
+      if(isActiveWorkingDay(group, d)) return d;
+    }
+    return d;
+  }
+
+  // Called whenever a student's total points for TODAY change (via the eval
+  // toggle). `delta` is the net point change of that single toggle action.
+  //   delta > 0  -> points increased
+  //   delta < 0  -> points decreased (deduction)
+  //   delta === 0-> no-op
+  function updateStreakOnPointsChange(group, student, delta){
+    ensureStudentStreakShape(student);
+    if(delta === 0) return;
+
+    if(delta < 0){
+      // Any decrease/deduction immediately kills the streak and hides the badge.
+      student.streak.count = 0;
+      return;
+    }
+
+    // delta > 0: an increase in points.
+    const today = todayDateOnly();
+    const todayStr = dateKey(today);
+
+    if(student.streak.lastActiveDate === todayStr){
+      // Already counted an increase today — points update, streak stays as-is.
+      return;
+    }
+
+    const prevActiveStr = dateKey(getPreviousActiveDay(group, today));
+    if(student.streak.lastActiveDate === prevActiveStr){
+      // Was active on the immediately-preceding working day -> streak continues.
+      student.streak.count = (student.streak.count || 0) + 1;
+    } else {
+      // Gap (missed one or more active working days) -> streak restarts at 1.
+      student.streak.count = 1;
+    }
+    student.streak.lastActiveDate = todayStr;
+  }
+
+  // Called on load / render to zero-out streaks for students who went silent
+  // on the last active working day (i.e. neither today nor that day has any
+  // recorded increase for them).
+  function checkStreakInactivity(group){
+    const today = todayDateOnly();
+    const todayStr = dateKey(today);
+    const prevActiveStr = dateKey(getPreviousActiveDay(group, today));
+    group.students.forEach(s=>{
+      ensureStudentStreakShape(s);
+      if(s.streak.count > 0 && s.streak.lastActiveDate !== todayStr && s.streak.lastActiveDate !== prevActiveStr){
+        s.streak.count = 0;
+      }
+    });
+  }
+
+  function streakBadgeHtml(student){
+    ensureStudentStreakShape(student);
+    if(!student.streak.count || student.streak.count <= 0) return '';
+    return ` <span class="streak-badge">🔥 ${student.streak.count}</span>`;
   }
 
   async function loadState(){
@@ -1225,6 +1354,7 @@
     if(!state) state = defaultState();
     if(!Array.isArray(state.groups)) state.groups = [];
     if(!Array.isArray(state.itemTemplates)) state.itemTemplates = [];
+    if(!state.deletedGroupIds || typeof state.deletedGroupIds !== 'object') state.deletedGroupIds = {};
     state.groups.forEach(ensureGroupShape);
     if(state.groups.length === 0) state.groups.push(newGroup('الحلقة الأولى'));
     // strip any legacy group-id pointers that might exist in old saved data —
@@ -1236,7 +1366,13 @@
 
   async function saveState(){
     try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ /* best-effort */ }
-    if(!isApplyingRemote) queueSyncPush();
+    if(!isApplyingRemote){
+      // Only a real local edit (not data we just applied FROM Supabase) counts
+      // as "this device changed something" — this timestamp is what protects
+      // the edit from being silently overwritten by an older remote copy.
+      try{ localStorage.setItem(LOCAL_TS_KEY, String(Date.now())); }catch(e){ /* best-effort */ }
+      queueSyncPush();
+    }
   }
 
   function getGroup(id){ return state.groups.find(g=>g.id===id) || null; }
@@ -1253,6 +1389,165 @@
     if(txt) txt.textContent = text;
   }
 
+  // ================= Merge (never-lose-data sync) =================
+  // The whole point of everything below: two devices (or a stale local copy
+  // vs. a fresh Supabase copy) are never simply "replaced" — they are
+  // combined. Anything that exists on EITHER side survives, unless it was
+  // explicitly deleted (recorded in a deletedXIds tombstone map with a
+  // timestamp). This makes concurrent edits from multiple devices safe:
+  // worst case is a rare same-field conflict resolved by recency, never a
+  // silently vanished record.
+
+  function unionIdArray(a, b){
+    const seen = new Set();
+    const out = [];
+    (a||[]).concat(b||[]).forEach(v => { if(!seen.has(v)){ seen.add(v); out.push(v); } });
+    return out;
+  }
+
+  // Merge two { key: [ids] } maps (e.g. todayEntries, or one day's records)
+  // by unioning the arrays for every key present on either side.
+  function mergeIdArrayMap(a, b){
+    const out = {};
+    const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
+    keys.forEach(k => { out[k] = unionIdArray((a||{})[k], (b||{})[k]); });
+    return out;
+  }
+
+  // Merge two { studentId: { day: [ids] } } maps (group.records).
+  function mergeRecordsMap(a, b){
+    const out = {};
+    const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
+    keys.forEach(k => { out[k] = mergeIdArrayMap((a||{})[k], (b||{})[k]); });
+    return out;
+  }
+
+  // Merge two { id: timestamp } tombstone maps: keep every id, latest wins.
+  function mergeTombstoneMap(a, b){
+    const out = Object.assign({}, a||{});
+    Object.keys(b||{}).forEach(k => {
+      out[k] = Math.max(out[k]||0, b[k]);
+    });
+    return out;
+  }
+
+  // Merge two { studentId: number } maps (group.resetAt) by taking the
+  // SMALLER value on conflict — a smaller resetAt excludes fewer days from
+  // the student's total, so ties are resolved in favor of showing more data
+  // rather than less.
+  function mergeResetAtMap(a, b){
+    const out = {};
+    const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
+    keys.forEach(k => {
+      const av = (a||{})[k], bv = (b||{})[k];
+      out[k] = (av===undefined) ? bv : (bv===undefined ? av : Math.min(av, bv));
+    });
+    return out;
+  }
+
+  function mergeArchivesArray(a, b){
+    const seen = new Set();
+    const out = [];
+    (a||[]).concat(b||[]).forEach(entry => {
+      const key = JSON.stringify(entry);
+      if(!seen.has(key)){ seen.add(key); out.push(entry); }
+    });
+    return out;
+  }
+
+  // Merge two students arrays by id union. On a name/streak conflict for the
+  // same id, the "primary" (more recently edited overall) side's version wins
+  // — but the student itself is never dropped just because only one side has it.
+  function mergeStudentsArray(aList, bList, deletedStudentIds, aIsPrimary){
+    const byId = {};
+    const order = [];
+    (aList||[]).forEach(s => { if(!deletedStudentIds[s.id]){ byId[s.id]=s; order.push(s.id); } });
+    (bList||[]).forEach(s => {
+      if(deletedStudentIds[s.id]) return;
+      if(byId[s.id]){
+        // Present on both sides — keep primary's copy but don't lose a
+        // higher streak count from the other side.
+        const primary = aIsPrimary ? byId[s.id] : s;
+        const secondary = aIsPrimary ? s : byId[s.id];
+        const merged = Object.assign({}, secondary, primary);
+        if(secondary.streak && primary.streak && secondary.streak.count > primary.streak.count){
+          merged.streak = secondary.streak;
+        }
+        byId[s.id] = merged;
+      } else { byId[s.id]=s; order.push(s.id); }
+    });
+    return order.map(id => byId[id]);
+  }
+
+  function mergeItemsArray(aList, bList, deletedItemIds, aIsPrimary){
+    const byId = {};
+    const order = [];
+    (aList||[]).forEach(it => { if(!deletedItemIds[it.id]){ byId[it.id]=it; order.push(it.id); } });
+    (bList||[]).forEach(it => {
+      if(deletedItemIds[it.id]) return;
+      if(byId[it.id]){
+        byId[it.id] = aIsPrimary ? byId[it.id] : it;
+      } else { byId[it.id]=it; order.push(it.id); }
+    });
+    return order.map(id => byId[id]);
+  }
+
+  function mergeGroup(a, b, aIsPrimary){
+    const primary = aIsPrimary ? a : b;
+    const deletedStudentIds = mergeTombstoneMap(a.deletedStudentIds, b.deletedStudentIds);
+    const deletedItemIds = mergeTombstoneMap(a.deletedItemIds, b.deletedItemIds);
+    return {
+      id: a.id,
+      name: primary.name || a.name || b.name,
+      // Never move the "current day" pointer backwards on merge.
+      currentDay: Math.max(a.currentDay||1, b.currentDay||1),
+      activeWorkingDays: (primary.activeWorkingDays && primary.activeWorkingDays.length) ? primary.activeWorkingDays : (a.activeWorkingDays || b.activeWorkingDays),
+      items: mergeItemsArray(a.items, b.items, deletedItemIds, aIsPrimary),
+      students: mergeStudentsArray(a.students, b.students, deletedStudentIds, aIsPrimary),
+      todayEntries: mergeIdArrayMap(a.todayEntries, b.todayEntries),
+      records: mergeRecordsMap(a.records, b.records),
+      resetAt: mergeResetAtMap(a.resetAt, b.resetAt),
+      archives: mergeArchivesArray(a.archives, b.archives),
+      deletedStudentIds: deletedStudentIds,
+      deletedItemIds: deletedItemIds
+    };
+  }
+
+  // Merges two full state snapshots (this device's copy and the server's
+  // copy) into one that contains everything from both, minus anything
+  // explicitly tombstoned. `aIsPrimary` only breaks ties on plain scalar
+  // fields (like a group's name) — it never causes a group, student, item,
+  // or record to disappear.
+  function mergeState(a, b, aIsPrimary){
+    if(!a) return b; if(!b) return a;
+    const deletedGroupIds = mergeTombstoneMap(a.deletedGroupIds, b.deletedGroupIds);
+    const byId = {};
+    const order = [];
+    (a.groups||[]).forEach(g => { if(!deletedGroupIds[g.id]){ byId[g.id]=g; order.push(g.id); } });
+    (b.groups||[]).forEach(g => {
+      if(deletedGroupIds[g.id]) return;
+      if(byId[g.id]) byId[g.id] = mergeGroup(byId[g.id], g, aIsPrimary);
+      else { byId[g.id]=g; order.push(g.id); }
+    });
+    let groups = order.map(id => byId[id]);
+    if(groups.length === 0) groups = [newGroup('الحلقة الأولى')];
+
+    // itemTemplates: union by id, primary wins on same-id field conflicts.
+    const tplById = {};
+    const tplOrder = [];
+    (a.itemTemplates||[]).forEach(t => { tplById[t.id]=t; tplOrder.push(t.id); });
+    (b.itemTemplates||[]).forEach(t => {
+      if(tplById[t.id]) tplById[t.id] = aIsPrimary ? tplById[t.id] : t;
+      else { tplById[t.id]=t; tplOrder.push(t.id); }
+    });
+
+    return {
+      groups: groups,
+      itemTemplates: tplOrder.map(id => tplById[id]),
+      deletedGroupIds: deletedGroupIds
+    };
+  }
+
   function ensureStateShapeFull(s){
     // Validates DATA only (groups). Navigation/selection pointers are never
     // part of the synced state anymore — see uiState / ensureUiStateShape().
@@ -1260,6 +1555,7 @@
     s.groups.forEach(ensureGroupShape);
     if(s.groups.length === 0) s.groups.push(newGroup('الحلقة الأولى'));
     if(!Array.isArray(s.itemTemplates)) s.itemTemplates = [];
+    if(!s.deletedGroupIds || typeof s.deletedGroupIds !== 'object') s.deletedGroupIds = {};
     delete s.evalGroupId; delete s.resultsGroupId; delete s.archiveGroupId; delete s.settingsGroupId;
     return true;
   }
@@ -1300,13 +1596,30 @@
         .upsert({ sync_id: cfg.syncId, data: state, updated_at: new Date().toISOString() }, { onConflict: 'sync_id' });
       if(error) throw error;
       setSyncStatus('ok', 'تمت المزامنة ✓');
+      // a push succeeded — clear any pending retry and reset the backoff
+      if(pushRetryTimer){ clearTimeout(pushRetryTimer); pushRetryTimer = null; }
+      pushRetryDelay = 3000;
       return true;
     }catch(e){
       console.error('sync push failed', e);
       const msg = (e && (e.message || e.error_description || e.hint)) || 'خطأ غير معروف';
-      setSyncStatus('err', 'تعذّر الحفظ: ' + msg);
+      setSyncStatus('err', 'تعذّر الحفظ، سيُعاد المحاولة تلقائيًا… (' + msg + ')');
+      scheduleRetryPush();
       return false;
     }
+  }
+
+  // Keeps retrying a failed save automatically (e.g. after a dropped
+  // connection) instead of giving up silently and leaving the latest edit
+  // stranded only in localStorage. Backs off gradually up to 60s between
+  // attempts so it doesn't hammer the network while offline.
+  function scheduleRetryPush(){
+    if(pushRetryTimer) return; // already scheduled
+    pushRetryTimer = setTimeout(() => {
+      pushRetryTimer = null;
+      pushRetryDelay = Math.min(pushRetryDelay * 2, 60000);
+      queueSyncPush();
+    }, pushRetryDelay);
   }
 
   function subscribeRealtime(cfg){
@@ -1323,8 +1636,18 @@
         if(!incoming) return;
         const incomingJSON = JSON.stringify(incoming);
         if(incomingJSON === lastPushedJSON) return; // our own write echoed back
+
+        // Merge instead of replace: keep anything this device already has
+        // that the incoming update doesn't know about yet (e.g. an edit
+        // made a split-second earlier that hasn't round-tripped through
+        // Supabase back to us as confirmation).
+        const incomingTs = payload.new.updated_at ? Date.parse(payload.new.updated_at) : Date.now();
+        let localTs = 0;
+        try{ localTs = parseInt(localStorage.getItem(LOCAL_TS_KEY) || '0', 10); }catch(e){ localTs = 0; }
+        const merged = mergeState(state, incoming, localTs > incomingTs);
+
         isApplyingRemote = true;
-        state = incoming;
+        state = merged;
         ensureStateShapeFull(state);
         try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ /* best-effort */ }
         // Re-validate this device's OWN navigation pointers against the new
@@ -1335,9 +1658,21 @@
         isApplyingRemote = false;
         renderAll();
         setSyncStatus('ok', 'تحديث من جهاز آخر ✓');
+        // If merging pulled in anything the incoming payload didn't have
+        // (our own recent local edit), push the merged superset back so
+        // every other connected device converges on the same full picture.
+        if(JSON.stringify(state) !== incomingJSON) queueSyncPush();
       })
       .subscribe();
   }
+
+  window.addEventListener('online', () => {
+    // Connection just came back — if we have unsynced local changes, don't
+    // wait for the backoff timer, push right away.
+    if(pushRetryTimer){ clearTimeout(pushRetryTimer); pushRetryTimer = null; }
+    pushRetryDelay = 3000;
+    if(supabaseClient) queueSyncPush();
+  });
 
   async function connectSync(){
     const cfg = loadSyncConfig();
@@ -1361,13 +1696,32 @@
 
       let pushedOk = true;
       if(data && data.data){
+        // Merge the server's copy with whatever this device already has,
+        // instead of picking one wholesale — this is what makes it safe to
+        // have multiple devices (or a stale reload) touch the data without
+        // ever losing a record. Which side wins a plain scalar tie is based
+        // on which was edited more recently; nothing is ever dropped just
+        // because it only exists on one side.
+        const remoteTs = data.updated_at ? Date.parse(data.updated_at) : 0;
+        let localTs = 0;
+        try{ localTs = parseInt(localStorage.getItem(LOCAL_TS_KEY) || '0', 10); }catch(e){ localTs = 0; }
+
+        const merged = mergeState(state, data.data, localTs > remoteTs);
+        const mergedJSON = JSON.stringify(merged);
+        const remoteJSON = JSON.stringify(data.data);
+
         isApplyingRemote = true;
-        state = data.data;
+        state = merged;
         ensureStateShapeFull(state);
         try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }catch(e){ /* best-effort */ }
         ensureUiStateShape();
         isApplyingRemote = false;
         renderAll();
+
+        // If the merged result has anything the server didn't (e.g. an edit
+        // made locally while offline), push it up so the server — and every
+        // other device — catches up. Otherwise there's nothing new to send.
+        if(mergedJSON !== remoteJSON) pushedOk = await pushToSupabase();
       }else{
         pushedOk = await pushToSupabase();
       }
@@ -1628,6 +1982,7 @@
     }
     if(!uiState.evalGroupId || !getGroup(uiState.evalGroupId)) uiState.evalGroupId = state.groups[0].id;
     const group = getGroup(uiState.evalGroupId);
+    checkStreakInactivity(group);
 
     let html = `<div class="card">
       <p class="section-title">اختر الحلقة</p>
@@ -1669,7 +2024,7 @@
     let rosterHtml = group.students.map(s => {
       const has = getDayList(group, selectedDay, s.id).length > 0;
       return `<button class="pill ${s.id===activeStudentId?'active':''} ${has?'marked':'' }" data-student="${s.id}">
-        <span class="pill-dot"></span>${escapeHtml(s.name)}
+        <span class="pill-dot"></span>${escapeHtml(s.name)}${streakBadgeHtml(s)}
       </button>`;
     }).join('');
 
@@ -1699,7 +2054,7 @@
       <div class="card">
         <div class="detail-head">
           <div>
-            <div class="detail-name">${escapeHtml(student.name)}</div>
+            <div class="detail-name">${escapeHtml(student.name)}${streakBadgeHtml(student)}</div>
             <div style="font-size:12.5px; color:var(--text-dim); margin-top:3px;">${dayLabel(selectedDay)}</div>
           </div>
           <div class="nav-mini">
@@ -1741,10 +2096,16 @@
     root.querySelectorAll('[data-item]').forEach(row=>{
       row.addEventListener('click', ()=>{
         const itemId = row.getAttribute('data-item');
+        const item = group.items.find(it=>it.id===itemId);
         const list = getDayList(group, selectedDay, student.id).slice();
         const pos = list.indexOf(itemId);
-        if(pos === -1) list.push(itemId); else list.splice(pos,1);
+        let pointsDelta = 0;
+        if(pos === -1){ list.push(itemId); pointsDelta = item ? item.points : 0; }
+        else { list.splice(pos,1); pointsDelta = item ? -item.points : 0; }
         setDayList(group, selectedDay, student.id, list);
+        // Streak is a real-calendar-day concept, so it only reacts to changes
+        // made on the actual "today" staging day — not when editing past days.
+        if(staging && pointsDelta !== 0) updateStreakOnPointsChange(group, student, pointsDelta);
         saveState();
         renderEval();
         if(!staging) renderResults();
@@ -1796,6 +2157,7 @@
     }
     if(!uiState.resultsGroupId || !getGroup(uiState.resultsGroupId)) uiState.resultsGroupId = state.groups[0].id;
     const group = getGroup(uiState.resultsGroupId);
+    checkStreakInactivity(group);
 
     let picker = `<div class="card">
       <p class="section-title">اختر الحلقة</p>
@@ -1812,7 +2174,7 @@
     }
 
     const ranked = group.students
-      .map(s => ({ id:s.id, name:s.name, total: studentTotal(group, s.id) }))
+      .map(s => ({ id:s.id, name:s.name, total: studentTotal(group, s.id), streakHtml: streakBadgeHtml(s) }))
       .sort((a,b)=> b.total - a.total);
     const max = Math.max(1, ranked[0].total);
 
@@ -1824,7 +2186,7 @@
         <div class="rank-row ${cls}" data-toggle="${r.id}" style="cursor:pointer;">
           <div class="rank-num">${i===0?trophyIcon():(i+1)}</div>
           <div class="rank-body">
-            <div class="rank-name">${escapeHtml(r.name)}</div>
+            <div class="rank-name">${escapeHtml(r.name)}${r.streakHtml}</div>
             <div class="rank-bar-bg"><div class="rank-bar-fill" style="width:${r.total>0?pct:0}%"></div></div>
           </div>
           <div class="rank-points">${r.total}<br><small>نقطة</small></div>
@@ -2118,6 +2480,16 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
         </div>
 
         <div class="card">
+          <p class="section-title">أيام العمل النشطة للستريك 🔥</p>
+          <p class="section-hint">اختر الأيام التي تُعتبر "أيام عمل" لهذه الحلقة — يُبنى عليها حساب الستريك تلقائيًا: من زاد نقاطه في يوم عمل نشط بعد يوم العمل السابق مباشرة يزداد ستريكه، ومن غاب في يوم عمل نشط يُصفَّر ستريكه فورًا. التغيير هنا يُطبَّق من اليوم التالي مباشرة.</p>
+          <div class="seg" id="activeWorkingDaysSeg" style="flex-wrap:wrap;">
+            ${['الأحد','الإثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'].map((label, idx)=>`
+              <button type="button" class="${group.activeWorkingDays.includes(idx)?'on':''}" data-weekday="${idx}">${label}</button>
+            `).join('')}
+          </div>
+        </div>
+
+        <div class="card">
           <p class="section-title">المشاركون</p>
           <p class="section-hint">إضافة اسم جديد تظهر فورًا في قائمة التقييم والنتائج لهذه الحلقة فقط.</p>
           ${studentRows}
@@ -2158,6 +2530,7 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
         const id = btn.getAttribute('data-remove-group');
         const g = getGroup(id);
         if(!confirm(`حذف حلقة "${g?g.name:''}" نهائيًا مع كل أسمائها وبنودها وسجلاتها وأرشيفها؟`)) return;
+        state.deletedGroupIds[id] = Date.now();
         state.groups = state.groups.filter(x=>x.id!==id);
         if(state.groups.length===0) state.groups.push(newGroup('الحلقة الأولى'));
         const fallback = state.groups[0].id;
@@ -2209,6 +2582,7 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
     root.querySelectorAll('[data-remove-item]').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         if(!confirm('حذف هذا البند؟ سيبقى تأثيره على أيام سابقة قد سُجِّل فيها.')) return;
+        group.deletedItemIds[btn.getAttribute('data-remove-item')] = Date.now();
         group.items = group.items.filter(x=>x.id!==btn.getAttribute('data-remove-item'));
         saveState(); renderAll();
       });
@@ -2278,6 +2652,7 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
       btn.addEventListener('click', ()=>{
         if(!confirm('حذف هذا المشارك نهائيًا مع كل سجله؟')) return;
         const id = btn.getAttribute('data-remove-student');
+        group.deletedStudentIds[id] = Date.now();
         group.students = group.students.filter(x=>x.id!==id);
         delete group.records[id]; delete group.resetAt[id]; delete group.todayEntries[id];
         if(expandedStudentId === id) expandedStudentId = null;
@@ -2294,6 +2669,22 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
         flashStatus('settingsStatus', `تم تصفير ${s.name} ✓`);
       });
     });
+    root.querySelectorAll('[data-weekday]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const day = Number(btn.getAttribute('data-weekday'));
+        const days = new Set(group.activeWorkingDays);
+        if(days.has(day)){
+          if(days.size <= 1){ flashStatus('settingsStatus', 'يجب أن يبقى يوم عمل واحد على الأقل'); return; }
+          days.delete(day);
+        } else {
+          days.add(day);
+        }
+        group.activeWorkingDays = Array.from(days).sort((a,b)=>a-b);
+        saveState(); renderSettings();
+        flashStatus('settingsStatus', 'تم تحديث أيام العمل النشطة ✓');
+      });
+    });
+
     function submitNewStudent(){
       const nameEl = document.getElementById('newStudentName');
       const name = nameEl.value.trim();
