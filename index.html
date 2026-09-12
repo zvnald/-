@@ -389,8 +389,6 @@
 
   /* gentle liveliness on interactive elements */
   .tab-btn.active{ animation: popIn .25s ease; }
-  .pill.active{ animation: popIn .25s ease; }
-  .item-row.on{ animation: popIn .2s ease; }
   .btn-primary:hover{ transform: translateY(-1px) scale(1.02); }
 
   /* floating background stars for a livelier kid feel */
@@ -2274,6 +2272,16 @@
     if(submitBtn) submitBtn.addEventListener('click', ()=> submitDay(group));
     const backBtn = document.getElementById('backTodayBtn');
     if(backBtn) backBtn.addEventListener('click', ()=>{ selectedDay = maxReachableDay(group); renderEval(); });
+
+    // renderEval() rebuilds .item-row/#submitDayBtn from scratch (fresh DOM
+    // nodes with no data-perm-locked attribute at all), and rbacApplyUI() is
+    // otherwise only called from renderAll() (login / settings change /
+    // remote sync) — not from every renderEval() call (item click, day/
+    // student navigation). Without this, the edit-permission lock would only
+    // "catch up" on those fresh rows whenever a renderAll() happened to also
+    // fire, making it look like the whole item list randomly locks/unlocks
+    // itself instead of being consistently applied every time.
+    rbacApplyUI();
   }
 
   function bindGroupPicker(root, onSelect){
