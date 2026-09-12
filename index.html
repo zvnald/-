@@ -2819,7 +2819,21 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
       const check = prompt('هذا سيحذف كل شيء نهائيًا: كل الحلقات وأسماءها وبنودها وسجلاتها وأرشيف كل الأشهر — ولا يمكن التراجع عنه إطلاقًا.\n\nللتأكيد، اكتب كلمة "حذف" بالضبط ثم اضغط موافق:');
       if(check === null) return;
       if(check.trim() !== 'حذف'){ flashStatus('settingsStatus', 'لم يتم الحذف — الكلمة المكتوبة غير مطابقة.'); return; }
+      // Tombstone every group/template this device currently knows about
+      // BEFORE wiping to a blank state. Without this, a later merge (page
+      // reload pulling from Supabase, or a realtime update from a copy that
+      // hadn't caught up to this deletion yet) has no way to tell "this was
+      // deliberately deleted" apart from "the other side just doesn't know
+      // about it yet" — a plain union-merge would silently bring the old
+      // groups back, making the button look like it doesn't work.
+      const now = Date.now();
+      const carriedDeletedGroupIds = Object.assign({}, state.deletedGroupIds);
+      (state.groups||[]).forEach(g => { carriedDeletedGroupIds[g.id] = now; });
+      const carriedDeletedTemplateIds = Object.assign({}, state.deletedTemplateIds);
+      (state.itemTemplates||[]).forEach(t => { carriedDeletedTemplateIds[t.id] = now; });
       state = defaultState();
+      state.deletedGroupIds = carriedDeletedGroupIds;
+      state.deletedTemplateIds = carriedDeletedTemplateIds;
       uiState = defaultUiState();
       activeStudentId = null; selectedDay = null; expandedStudentId = null; compareStudentId = null;
       ensureUiStateShape();
