@@ -1255,6 +1255,15 @@
     if(!g.currentDay) g.currentDay = 1;
     if(typeof g.streakDayCounter !== 'number') g.streakDayCounter = 0;
     g.students.forEach(s => ensureStudentStreakShape(s, g.streakDayCounter));
+    // Migrate any old-format day entries — plain arrays of "on" item ids —
+    // into the new toggle-map format { itemId: {on, ts} }. Old data has no
+    // real toggle timestamp, so it's stamped ts:0 (lowest priority — any
+    // fresher explicit toggle from now on will correctly out-rank it).
+    Object.keys(g.todayEntries).forEach(sid => { g.todayEntries[sid] = migrateToggleEntry(g.todayEntries[sid]); });
+    Object.keys(g.records).forEach(sid => {
+      const byDay = g.records[sid] || {};
+      Object.keys(byDay).forEach(day => { byDay[day] = migrateToggleEntry(byDay[day]); });
+    });
   }
 
   // ================= Streak (based on submitted DAYS, not real dates) =================
@@ -1300,7 +1309,7 @@
   // without mutating anything.
   function computeLiveStreak(group, student){
     ensureStudentStreakShape(student, group.streakDayCounter);
-    const todayList = group.todayEntries[student.id] || [];
+    const todayList = toggleMapToArray(group.todayEntries[student.id]);
     const hasDeduction = todayList.some(id => {
       const it = group.items.find(x => x.id === id);
       return it && it.points < 0;
@@ -1330,7 +1339,7 @@
   // student ended up with today.
   function finalizeStreakForDay(group, student){
     ensureStudentStreakShape(student, group.streakDayCounter);
-    const todayList = group.todayEntries[student.id] || [];
+    const todayList = toggleMapToArray(group.todayEntries[student.id]);
     const hasDeduction = todayList.some(id => {
       const it = group.items.find(x => x.id === id);
       return it && it.points < 0;
@@ -1465,8 +1474,11 @@
     return out;
   }
 
-  // Merge two { key: [ids] } maps (e.g. todayEntries, or one day's records)
-  // by unioning the arrays for every key present on either side.
+  // Merge two { key: [ids] } maps by unioning the arrays for every key
+  // present on either side. Kept for anything that's a genuinely additive
+  // set (never intentionally shrinks). NOT used for todayEntries/records
+  // any more — see mergeToggleMap below for why a plain union is wrong
+  // there (it can't represent an un-check surviving a merge).
   function mergeIdArrayMap(a, b){
     const out = {};
     const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
@@ -1474,11 +1486,36 @@
     return out;
   }
 
-  // Merge two { studentId: { day: [ids] } } maps (group.records).
+  // Merge two toggle maps { itemId: {on, ts} } (one student's marks for one
+  // day). Per item id, keep whichever side recorded the more recent
+  // explicit toggle — this is what lets an un-check (on:false) survive a
+  // merge against a stale copy that still has the item on:true, instead of
+  // a plain array-union silently re-adding it.
+  function mergeToggleMap(a, b){
+    const out = {};
+    const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
+    keys.forEach(k => {
+      const av = (a||{})[k], bv = (b||{})[k];
+      if(!av) out[k] = bv;
+      else if(!bv) out[k] = av;
+      else out[k] = ((bv.ts||0) > (av.ts||0)) ? bv : av;
+    });
+    return out;
+  }
+
+  // Merge two { studentId: toggleMap } maps (e.g. todayEntries).
+  function mergeToggleEntryMap(a, b){
+    const out = {};
+    const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
+    keys.forEach(k => { out[k] = mergeToggleMap(migrateToggleEntry((a||{})[k]), migrateToggleEntry((b||{})[k])); });
+    return out;
+  }
+
+  // Merge two { studentId: { day: toggleMap } } maps (group.records).
   function mergeRecordsMap(a, b){
     const out = {};
     const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
-    keys.forEach(k => { out[k] = mergeIdArrayMap((a||{})[k], (b||{})[k]); });
+    keys.forEach(k => { out[k] = mergeToggleEntryMap((a||{})[k], (b||{})[k]); });
     return out;
   }
 
@@ -1594,7 +1631,7 @@
       streakDayCounter: Math.max(a.streakDayCounter||0, b.streakDayCounter||0),
       items: mergeItemsArray(a.items, b.items, deletedItemIds, aIsPrimary),
       students: mergeStudentsArray(a.students, b.students, deletedStudentIds, aIsPrimary),
-      todayEntries: mergeIdArrayMap(aTE, bTE),
+      todayEntries: mergeToggleEntryMap(aTE, bTE),
       records: mergeRecordsMap(aRec, bRec),
       resetAt: mergeResetAtMap(aReset, bReset),
       archives: mergeArchivesArray(a.archives, b.archives),
@@ -1904,7 +1941,7 @@
     Object.keys(recs).forEach(dayStr => {
       const day = Number(dayStr);
       if(day > resetAt){
-        (recs[dayStr] || []).forEach(itemId => { total += (pmap[itemId] || 0); });
+        toggleMapToArray(recs[dayStr]).forEach(itemId => { total += (pmap[itemId] || 0); });
       }
     });
     return total;
@@ -1916,17 +1953,61 @@
   function isStagingDay(group, day){ return day === group.currentDay && group.currentDay <= 16; }
   function dayLabel(day){ return `الأسبوع ${weekOf(day)} · اليوم ${dayInWeekOf(day)} من ٤ (اليوم ${day} من ١٦)`; }
 
+  // ---- Day-entry storage format ----
+  // Each student's marks for a given day are stored as a "toggle map":
+  //   { itemId: { on: boolean, ts: number } }
+  // instead of a plain array of "on" item ids. A plain array can only ever
+  // grow when merged with another device's copy (a union has no way to
+  // express "this id used to be in the list and was deliberately removed"),
+  // so un-checking an item would always get silently resurrected by the
+  // next realtime sync/merge from any device still holding the old ON
+  // state. Storing a timestamp per item lets the merge keep whichever side
+  // recorded the more recent explicit toggle — on OR off — so a real
+  // un-check reliably survives sync. migrateToggleEntry() upgrades old
+  // saved data (plain arrays) into this format on load.
+  function migrateToggleEntry(v){
+    if(Array.isArray(v)){
+      const out = {};
+      v.forEach(id => { out[id] = { on:true, ts:0 }; });
+      return out;
+    }
+    return (v && typeof v === 'object') ? v : {};
+  }
+  function toggleMapToArray(map){
+    if(!map) return [];
+    if(Array.isArray(map)) return map.slice(); // safety net for stray old-format data
+    return Object.keys(map).filter(id => map[id] && map[id].on);
+  }
+  // Builds a fresh toggle map representing `list` as the new "on" set,
+  // reusing prevMap's existing timestamps for any id whose on/off state
+  // didn't change, and stamping only the ids that actually flipped with a
+  // brand-new timestamp (Date.now()) — that's what makes THIS toggle win
+  // any future merge against a stale copy.
+  function arrayToToggleMap(list, prevMap){
+    const prev = migrateToggleEntry(prevMap);
+    const wantOn = new Set(list||[]);
+    const allIds = new Set([...Object.keys(prev), ...wantOn]);
+    const now = Date.now();
+    const out = {};
+    allIds.forEach(id=>{
+      const wasOn = !!(prev[id] && prev[id].on);
+      const isOn = wantOn.has(id);
+      out[id] = (wasOn === isOn) ? (prev[id] || { on:isOn, ts:0 }) : { on:isOn, ts:now };
+    });
+    return out;
+  }
+
   function getDayList(group, day, studentId){
-    if(isStagingDay(group, day)) return group.todayEntries[studentId] || [];
+    if(isStagingDay(group, day)) return toggleMapToArray(group.todayEntries[studentId]);
     const recs = group.records[studentId] || {};
-    return recs[day] || [];
+    return toggleMapToArray(recs[day]);
   }
   function setDayList(group, day, studentId, list){
     if(isStagingDay(group, day)){
-      group.todayEntries[studentId] = list;
+      group.todayEntries[studentId] = arrayToToggleMap(list, group.todayEntries[studentId]);
     }else{
       if(!group.records[studentId]) group.records[studentId] = {};
-      group.records[studentId][day] = list;
+      group.records[studentId][day] = arrayToToggleMap(list, group.records[studentId][day]);
     }
   }
 
@@ -1938,7 +2019,7 @@
     const counts = {};
     group.items.forEach(it => counts[it.id] = 0);
     includedDays.forEach(d=>{
-      (recs[d] || []).forEach(itemId=>{ if(counts.hasOwnProperty(itemId)) counts[itemId]++; });
+      toggleMapToArray(recs[d]).forEach(itemId=>{ if(counts.hasOwnProperty(itemId)) counts[itemId]++; });
     });
     return { totalDays, counts };
   }
@@ -2292,7 +2373,7 @@
 
   async function submitDay(group){
     if(group.currentDay > 16) return;
-    const unmarked = group.students.length - group.students.filter(s => (group.todayEntries[s.id]||[]).length>0).length;
+    const unmarked = group.students.length - group.students.filter(s => toggleMapToArray(group.todayEntries[s.id]).length>0).length;
     let msg = `سيتم احتساب نقاط اليوم ${group.currentDay} لجميع مشاركي حلقة "${group.name}".`;
     if(unmarked>0) msg += `\n(${unmarked} لم يُسجَّل لهم أي بند وسيُحتسب لهم صفر اليوم)`;
     if(!confirm(msg + '\n\nهل تريد المتابعة؟')) return;
@@ -2305,7 +2386,7 @@
       // ended up with today — must run BEFORE todayEntries is cleared below.
       finalizeStreakForDay(group, s);
       if(!group.records[s.id]) group.records[s.id] = {};
-      group.records[s.id][group.currentDay] = group.todayEntries[s.id] || [];
+      group.records[s.id][group.currentDay] = group.todayEntries[s.id] || {};
     });
     group.todayEntries = {};
     group.currentDay += 1;
