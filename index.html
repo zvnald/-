@@ -1264,6 +1264,10 @@
       const byDay = g.records[sid] || {};
       Object.keys(byDay).forEach(day => { byDay[day] = migrateToggleEntry(byDay[day]); });
     });
+    Object.keys(g.resetAt).forEach(sid => {
+      const v = migrateResetEntry(g.resetAt[sid]);
+      if(v !== undefined) g.resetAt[sid] = v; else delete g.resetAt[sid];
+    });
   }
 
   // ================= Streak (based on submitted DAYS, not real dates) =================
@@ -1528,16 +1532,22 @@
     return out;
   }
 
-  // Merge two { studentId: number } maps (group.resetAt) by taking the
-  // SMALLER value on conflict — a smaller resetAt excludes fewer days from
-  // the student's total, so ties are resolved in favor of showing more data
-  // rather than less.
+  // Merge two { studentId: {value, ts} } maps (group.resetAt). Per student,
+  // keep whichever side recorded the more recent explicit "تصفير" action —
+  // NOT simply the smaller value. Picking the smaller value unconditionally
+  // (the old behavior) meant an intentional reset (which RAISES resetAt to
+  // exclude more/all past days) could never survive a merge against any
+  // stale copy that still had the old, smaller threshold — the button would
+  // say "تم التصفير" but a moment later sync would quietly undo it. A
+  // timestamp per entry lets the real, latest action win either way.
   function mergeResetAtMap(a, b){
     const out = {};
     const keys = new Set([...Object.keys(a||{}), ...Object.keys(b||{})]);
     keys.forEach(k => {
-      const av = (a||{})[k], bv = (b||{})[k];
-      out[k] = (av===undefined) ? bv : (bv===undefined ? av : Math.min(av, bv));
+      const av = migrateResetEntry((a||{})[k]), bv = migrateResetEntry((b||{})[k]);
+      if(av===undefined) out[k] = bv;
+      else if(bv===undefined) out[k] = av;
+      else out[k] = ((bv.ts||0) > (av.ts||0)) ? bv : av;
     });
     return out;
   }
@@ -1933,9 +1943,23 @@
     return m;
   }
 
+  // ---- resetAt storage format ----
+  // Each student's "تصفير" threshold is stored as { value: number, ts: number }
+  // instead of a plain number — see resetAtValue()/mergeResetAtMap() below for
+  // why a bare number can't survive a merge correctly.
+  function migrateResetEntry(v){
+    if(v === undefined || v === null) return undefined;
+    if(typeof v === 'number') return { value:v, ts:0 };
+    return v;
+  }
+  function resetAtValue(group, studentId){
+    const v = migrateResetEntry(group.resetAt[studentId]);
+    return v ? v.value : 0;
+  }
+
   function studentTotal(group, studentId){
     const recs = group.records[studentId] || {};
-    const resetAt = group.resetAt[studentId] || 0;
+    const resetAt = resetAtValue(group, studentId);
     const pmap = pointsMap(group);
     let total = 0;
     Object.keys(recs).forEach(dayStr => {
@@ -2013,7 +2037,7 @@
 
   function studentItemBreakdown(group, studentId){
     const recs = group.records[studentId] || {};
-    const resetAt = group.resetAt[studentId] || 0;
+    const resetAt = resetAtValue(group, studentId);
     const includedDays = Object.keys(recs).map(Number).filter(d => d > resetAt);
     const totalDays = includedDays.length;
     const counts = {};
@@ -2693,7 +2717,7 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
         </div>`).join('') || `<p class="empty-state">لا توجد قوالب محفوظة بعد.</p>`;
 
       const studentRows = group.students.map(s => {
-        const hasReset = (group.resetAt[s.id]||0) > 0;
+        const hasReset = resetAtValue(group, s.id) > 0;
         return `<div class="list-row">
           <input class="field field-name" data-student-name="${s.id}" value="${escapeAttr(s.name)}">
           <span style="font-size:12px;color:var(--text-dim); min-width:60px;">${hasReset?'صُفِّر مؤخرًا':''}</span>
@@ -2904,7 +2928,7 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
         const id = btn.getAttribute('data-reset-student');
         const s = group.students.find(x=>x.id===id);
         if(!confirm(`تصفير نقاط "${s.name}"؟ سيبدأ احتسابه من جديد اعتبارًا من اليوم الحالي.`)) return;
-        group.resetAt[id] = group.currentDay - 1;
+        group.resetAt[id] = { value: group.currentDay - 1, ts: Date.now() };
         saveState(); renderAll();
         flashStatus('settingsStatus', `تم تصفير ${s.name} ✓`);
       });
@@ -2927,7 +2951,7 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
 
     document.getElementById('resetAllBtn').addEventListener('click', ()=>{
       if(!confirm(`تصفير نقاط جميع مشاركي حلقة "${group.name}"؟ سيبدأ الجميع من جديد اعتبارًا من اليوم الحالي.`)) return;
-      group.students.forEach(s=>{ group.resetAt[s.id] = group.currentDay - 1; });
+      group.students.forEach(s=>{ group.resetAt[s.id] = { value: group.currentDay - 1, ts: Date.now() }; });
       saveState(); renderAll();
       flashStatus('settingsStatus', 'تم تصفير جميع المشاركين ✓');
     });
