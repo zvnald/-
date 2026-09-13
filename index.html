@@ -2765,6 +2765,9 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
           <p class="section-title">البنود اليومية</p>
           <p class="section-hint">نفس البنود تُستخدم كل يوم طوال الشهر. بند "مكسب" يضيف نقاطًا عند تنفيذه، وبند "خصم" ينقص نقاطًا عند وقوع سلوك غير مرغوب — كلاهما يظهر فورًا في شاشة التقييم دون أي تعديل آخر.</p>
           ${itemRows}
+          ${group.items.length ? `<div class="settings-foot" style="margin-top:6px;">
+            <button class="btn btn-danger btn-sm" id="removeAllItemsBtn">حذف جميع البنود (${group.items.length})</button>
+          </div>` : ''}
           <div class="add-form">
             <input class="field field-name" id="newItemName" placeholder="اسم البند الجديد">
             <div class="seg" id="newItemTypeSeg">
@@ -2895,6 +2898,19 @@ alter publication supabase_realtime add table ${RBAC_SYNC_TABLE};</div>
         group.items = group.items.filter(x=>x.id!==btn.getAttribute('data-remove-item'));
         saveState(); renderAll();
       });
+    });
+    const removeAllItemsBtn = document.getElementById('removeAllItemsBtn');
+    if(removeAllItemsBtn) removeAllItemsBtn.addEventListener('click', ()=>{
+      if(!group.items.length) return;
+      if(!confirm(`حذف جميع بنود حلقة "${group.name}" (${group.items.length} بند) دفعة واحدة؟ سجلات الأيام السابقة تبقى محفوظة كما هي كما لو حذفتها واحدًا واحدًا. بعدها تقدر تضيف بنودًا جديدة أو تطبّق أحد القوالب المحفوظة أدناه.`)) return;
+      // Tombstone every item being removed (same as the single-item delete
+      // below), not just clear the array — otherwise a sync from a device
+      // that hasn't caught up yet would silently bring the old items back.
+      const now = Date.now();
+      group.items.forEach(it => { group.deletedItemIds[it.id] = now; });
+      group.items = [];
+      saveState(); renderAll();
+      flashStatus('settingsStatus', 'تم حذف جميع البنود ✓');
     });
     let newItemType = 'pos';
     const segBtns = root.querySelectorAll('#newItemTypeSeg button');
