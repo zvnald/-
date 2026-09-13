@@ -774,8 +774,24 @@
   let rbacLastPushedJSON = null;
   let rbacPushInFlight = false;
   let rbacPushQueued = false;
+  // True from the moment an admin changes something locally (permission,
+  // role, username, password, add/delete user) until that change has been
+  // confirmed pushed to Supabase. This — NOT a JSON comparison against
+  // rbacLastPushedJSON — is what flushPendingSyncOnHide() below relies on to
+  // decide whether to force-push on backgrounding. A device that never makes
+  // its own edit (e.g. a phone that only ever *receives* permission changes)
+  // has rbacLastPushedJSON stuck at null forever, so a stringify-diff check
+  // is always true and would re-upload that device's local cache — possibly
+  // stale — every single time it backgrounds. On mobile that happens
+  // constantly (screen lock, app switch), so a stale cache on a passive
+  // phone could silently clobber a permission change made moments earlier
+  // on another device, and that clobber then broadcasts to every device via
+  // realtime — which is exactly the "activates briefly, then gets cancelled
+  // everywhere" bug this flag fixes.
+  let rbacLocalDirty = false;
 
   function rbacQueueSyncPush(){
+    rbacLocalDirty = true;
     if(!supabaseClient) return;
     if(rbacPushInFlight){ rbacPushQueued = true; return; }
     rbacFirePush();
@@ -801,6 +817,7 @@
         .from(RBAC_SYNC_TABLE)
         .upsert({ sync_id: cfg.syncId, data: payload, updated_at: new Date().toISOString() }, { onConflict: 'sync_id' });
       if(error) throw error;
+      rbacLocalDirty = false; // confirmed on the server — nothing left to flush
       return true;
     }catch(e){
       console.error('rbac sync push failed', e);
@@ -1867,7 +1884,11 @@
     if(hasSyncedOnce && state && stableStringify(state) !== lastPushedJSON){
       keepaliveUpsert(SYNC_TABLE, cfg.syncId, state);
     }
-    if(rbacHasSyncedOnce && rbacStore && stableStringify({users: rbacStore.users}) !== rbacLastPushedJSON){
+    // Only flush RBAC data if THIS device actually made an unconfirmed local
+    // edit (rbacLocalDirty) — never merely because the local cache differs
+    // from what this device last pushed itself (see rbacLocalDirty's
+    // definition above for why that check used to misfire constantly).
+    if(rbacHasSyncedOnce && rbacStore && rbacLocalDirty){
       keepaliveUpsert(RBAC_SYNC_TABLE, cfg.syncId, { users: rbacStore.users });
     }
   }
