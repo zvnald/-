@@ -655,6 +655,8 @@
   let pushRetryTimer = null;   // timer handle for auto-retry after a failed push
   let pushRetryDelay = 3000;   // backs off up to a cap when retries keep failing
   let pushQueued = false;      // true if data changed again while a push was in flight
+  let hasSyncedOnce = false;   // true once this device has pulled the server's DATA at least once
+  let rbacHasSyncedOnce = false; // true once this device has pulled the server's USERS/permissions at least once
 
   const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
 
@@ -872,6 +874,7 @@
         await rbacPushToSupabase();
       }
       rbacSubscribeRealtime(cfg);
+      rbacHasSyncedOnce = true;
     }catch(e){
       console.error('rbac sync connect failed', e);
       // fall back silently to the local cache already loaded in rbacStore
@@ -1853,11 +1856,18 @@
     const cfg = loadSyncConfig();
     if(!cfg) return;
     // Only bother firing a request if there's actually something this
-    // device hasn't confirmed the server has yet.
-    if(state && stableStringify(state) !== lastPushedJSON){
+    // device hasn't confirmed the server has yet. Also require that this
+    // device has completed at least one successful pull from the server
+    // first — otherwise, if the tab is backgrounded (e.g. switching apps
+    // on a phone) before the initial sync finishes, this device's stale
+    // cached copy (from before it ever heard about a change made on
+    // another device) would get pushed and silently clobber the real,
+    // up-to-date server data. That's what made permission changes made on
+    // one device appear to "not sync" / "stay disabled" on another.
+    if(hasSyncedOnce && state && stableStringify(state) !== lastPushedJSON){
       keepaliveUpsert(SYNC_TABLE, cfg.syncId, state);
     }
-    if(rbacStore && stableStringify({users: rbacStore.users}) !== rbacLastPushedJSON){
+    if(rbacHasSyncedOnce && rbacStore && stableStringify({users: rbacStore.users}) !== rbacLastPushedJSON){
       keepaliveUpsert(RBAC_SYNC_TABLE, cfg.syncId, { users: rbacStore.users });
     }
   }
@@ -1923,6 +1933,7 @@
         pushedOk = await pushToSupabase();
       }
       subscribeRealtime(cfg);
+      hasSyncedOnce = true;
       // Only report "connected" if we actually confirmed read/write access —
       // otherwise keep whatever error status pushToSupabase already set,
       // instead of silently overwriting a real failure with a false "ok".
